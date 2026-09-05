@@ -1,9 +1,9 @@
-# Crew Ops Advisor — Deterministic Engine
+# Crew Ops Advisor
 
 Implementation of the architecture in [ARCHITECTURE.md](ARCHITECTURE.md):
-everything **below** the LLM boundary is built and verified. The LLM adapter is
-deliberately not wired yet (provider TBD at the venue) — it plugs into one
-file, `crew_ops/tools.py`, with zero changes elsewhere.
+a deterministic engine below the tool boundary, and a provider-agnostic AI
+layer above it. The LLM provider (**Claude** or **Sarvam**) is a `.env`
+switch, not a code change.
 
 ## Status
 
@@ -11,8 +11,11 @@ file, `crew_ops/tools.py`, with zero changes elsewhere.
   all 16 Tier-1, all 14 Tier-2 minus 1 open-ended, all 8 Tier-3 minus 2
   open-ended questions, and all 6 scenarios (S1–S6). The 3 open-ended prose
   questions (Q30/Q36/Q38) are flagged for human judging, never auto-passed.
-- **107 pytest tests** green (`python3 -m pytest tests/`), runtime < 1 s.
-- No dependencies beyond Python 3.9+ stdlib (pytest for the test suite only).
+- **121 pytest tests** green (`python3 -m pytest tests/`), runtime < 1 s —
+  including the AI layer (config, both wire formats, advisor loop,
+  groundedness gate), all offline via a fake provider.
+- Engine + Sarvam path: Python 3.9+ stdlib only. Claude path additionally
+  needs `pip install anthropic`. (pytest for the test suite only.)
 
 ## Run it
 
@@ -27,6 +30,34 @@ python3 cli.py call recommend_cover \
 python3 cli.py repl                 # interactive tool shell
 ```
 
+### The AI advisor
+
+```bash
+cp .env.example .env                # then fill in one API key
+python3 cli.py ask "Captain C-1042 just called in sick — who covers P-2291?"
+python3 cli.py chat                 # multi-turn session (follow-ups keep context)
+```
+
+Switch providers by editing one line in `.env` — `LLM_PROVIDER=claude` or
+`LLM_PROVIDER=sarvam` — or per run, since real env vars override the file:
+
+```bash
+LLM_PROVIDER=sarvam python3 cli.py ask "Which reserves are on call at BLR tomorrow?"
+```
+
+| `.env` key | Meaning | Default |
+|---|---|---|
+| `LLM_PROVIDER` | `claude` or `sarvam` | `claude` |
+| `ANTHROPIC_API_KEY` / `SARVAM_API_KEY` | key for the chosen provider | — |
+| `CLAUDE_MODEL` / `SARVAM_MODEL` | model override | `claude-opus-5` / `sarvam-105b` |
+| `CLAUDE_FALLBACKS` | server-side refusal fallback (`0` to disable) | `1` |
+| `SARVAM_REASONING_EFFORT` | `low` / `medium` / `high` | provider default |
+| `LLM_MAX_TOKENS`, `LLM_MAX_STEPS` | response cap, tool-call budget per question | 16000/4096, 16 |
+
+Troubleshooting: a Claude "cannot reach the Claude API … Decompressor.decompress()
+… output_buffer_limit" error means the environment ships an old `brotlicffi`
+(Anaconda base does) — fix with `pip install -U brotlicffi`.
+
 The dataset directory is auto-discovered (any `**/data/flights.json` under the
 repo); override with `CREW_OPS_DATA=/path/to/data`.
 
@@ -40,27 +71,35 @@ repo); override with `CREW_OPS_DATA=/path/to/data`.
 | `crew_ops/simulation.py` | Tier 2 — sick crew, station closure, delay, cert expiry, rest, cancellation; never mutates the world |
 | `crew_ops/recommender.py` | Tier 3 — enumerate → 7-rule filter → cost → rank; joint plans; delay recovery; notification facts |
 | `crew_ops/tools.py` | **The LLM boundary**: 19 typed tools, JSON in/out, every response carries `sources` + `trace`; bad input → honest refusal, not an exception |
+| `crew_ops/llm/` | **The AI layer**: `config.py` (.env + provider selection), `providers.py` (Claude via the `anthropic` SDK, Sarvam via stdlib HTTP, one neutral format), `agent.py` (advisor loop + groundedness gate) |
 | `crew_ops/regression.py` | Maps all 38 questions + 6 scenarios to engine calls and diffs against the answer keys |
-| `cli.py` | Demo / tool shell (no LLM needed) |
+| `cli.py` | Demo / tool shell (no LLM needed) + `ask`/`chat` advisor commands |
 | `run_regression.py` | Scoreboard |
 | `tests/` | Unit tests pinned to the engineered facts + full answer-key regression |
 
-## Where the LLM plugs in
+## How the AI layer works
 
-An adapter for any provider needs only:
+`crew_ops/llm/agent.py` implements the adapter recipe end to end, once, for
+any provider:
 
-1. `tools.tool_schemas()` → hand to the model as its tool definitions
-   (already JSON-schema shaped).
-2. On every tool call: `tools.dispatch(world, name, args)` → return the JSON
-   to the model.
-3. System prompt: snapshot "now" is `2026-09-14T18:00:00Z`; instruct the model
-   to resolve names/dates to ids, call tools for **every** fact, narrate only
-   values present in tool results, and refuse when no tool answers.
-4. Optional groundedness gate: scan the drafted answer for crew ids, flight
-   numbers, hours and ₹ amounts; verify each appears in the collected tool
-   results before showing it.
+1. `tools.tool_schemas()` are handed to the model as its tool definitions;
+   every tool call the model makes is routed through
+   `tools.dispatch(world, name, args)` and the JSON returned verbatim.
+2. The system prompt pins snapshot "now" = `2026-09-14T18:00:00Z`, requires
+   entity resolution to canonical ids (echoed back for the controller to
+   verify), forbids the model computing any number itself, and mandates
+   honest refusal when no tool answers.
+3. A deterministic **groundedness gate** scans the final answer for crew ids,
+   pairing ids, flight numbers and registrations; any id absent from the
+   collected tool results (and the controller's own question) is flagged as
+   unverified in the shown answer.
 
-Until then, `cli.py` exercises the identical boundary by hand.
+Providers plug in behind one interface (`crew_ops/llm/providers.py`): the
+advisor speaks a neutral conversation format, and each provider translates
+to its wire format — Anthropic content blocks for Claude (thinking/tool_use
+blocks echoed back verbatim), OpenAI-style chat completions for Sarvam.
+Adding a third provider is one subclass with two translation functions;
+the agent loop, grounding and CLI are untouched.
 
 ## Domain subtleties the engine encodes (found in dataset archaeology)
 

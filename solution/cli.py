@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Crew Ops Advisor — engine CLI (no LLM required).
+"""Crew Ops Advisor — CLI.
 
-This drives the exact tool boundary the LLM will use, so everything the
-model will be able to do can be exercised and demoed directly:
+Engine-only commands (no LLM, no keys needed):
 
   python3 cli.py tools                       # list tools + parameters
   python3 cli.py call <tool> '<json-args>'   # invoke one tool
   python3 cli.py demo                        # walk the flagship S2 disruption
   python3 cli.py repl                        # interactive tool shell
+
+AI advisor commands (configure a provider in solution/.env — see
+.env.example; switch Claude <-> Sarvam by changing LLM_PROVIDER):
+
+  python3 cli.py ask "Who can cover P-2291 if C-1042 is sick?"
+  python3 cli.py chat                        # multi-turn advisor session
 
 Examples:
   python3 cli.py call get_reserves '{"base": "BLR", "date": "2026-09-15"}'
@@ -16,6 +21,7 @@ Examples:
 """
 
 import json
+import os
 import sys
 
 from crew_ops import load_world
@@ -96,6 +102,59 @@ def repl(world):
         show(T.dispatch(world, parts[0], args))
 
 
+def make_advisor(world):
+    from crew_ops.llm import Advisor, ConfigError, provider_from_env
+    try:
+        provider = provider_from_env()
+    except ConfigError as e:
+        print(f"config error: {e}")
+        return None
+
+    def on_event(kind, p):
+        if kind == "tool_call":
+            print(f"  -> {p['name']}({json.dumps(p['args'])})")
+        elif kind == "tool_result" and not p["ok"]:
+            print(f"     x {p['name']} refused (relayed to the model)")
+
+    print(f"[AI layer: provider={provider.name} model={provider.model}]")
+    return Advisor(world, provider, on_event=on_event,
+                   max_steps=int(os.environ.get("LLM_MAX_STEPS", "16")))
+
+
+def ask(world, question):
+    from crew_ops.llm import ProviderError
+    advisor = make_advisor(world)
+    if advisor is None:
+        return 1
+    try:
+        answer = advisor.ask(question)
+    except ProviderError as e:
+        print(f"provider error: {e}")
+        return 1
+    print(f"\n{answer}")
+    return 0
+
+
+def chat(world):
+    from crew_ops.llm import ProviderError
+    advisor = make_advisor(world)
+    if advisor is None:
+        return 1
+    print("crew-ops-ai> ask in plain language — 'quit' to exit")
+    while True:
+        try:
+            line = input("crew-ops-ai> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not line or line in ("quit", "exit"):
+            break
+        try:
+            print(f"\n{advisor.ask(line)}\n")
+        except ProviderError as e:
+            print(f"provider error: {e}")
+    return 0
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         print(__doc__)
@@ -118,6 +177,13 @@ def main():
         demo(world)
     elif cmd == "repl":
         repl(world)
+    elif cmd == "ask":
+        if len(sys.argv) < 3:
+            print('usage: cli.py ask "<question>"')
+            return 1
+        return ask(world, " ".join(sys.argv[2:]))
+    elif cmd == "chat":
+        return chat(world)
     else:
         print(f"unknown command '{cmd}'\n{__doc__}")
         return 1

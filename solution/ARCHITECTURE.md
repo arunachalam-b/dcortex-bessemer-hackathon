@@ -2,8 +2,9 @@
 
 **Hackathon:** dCortex "Agentic Crew Ops Advisor"
 **Status:** Deterministic engine + tool boundary implemented and verified
-(41/41 answer-key checks, 107 tests — see [README.md](README.md)). The LLM
-adapter is the only unbuilt piece (provider TBD); it plugs into
+(41/41 answer-key checks, 121 tests — see [README.md](README.md)). The LLM
+adapter is built provider-agnostic in `crew_ops/llm/` (Claude or Sarvam,
+switched via `.env`); it plugs into
 `crew_ops/tools.py` with no changes elsewhere.
 
 ---

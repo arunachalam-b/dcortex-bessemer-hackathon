@@ -222,6 +222,23 @@ drafts but refuses to pretend prose can be auto-verified.
 Full transcripts: `solution/llm_eval_out/results.json` (also browsable in the
 web UI's **Eval** tab, which can re-run the whole eval live).
 
+### The Eval tab, live
+
+![Eval tab mid-run: progress bar, PASS/PARTIAL/MANUAL/ERROR counters and atom coverage, with Tier-1 rows passing](screenshots/image_1.png)
+
+*A full eval re-running live inside the web UI — per-item status, atoms
+found, tool-call count, response time, and a transcript behind every
+`answer` button.*
+
+![Eval tab bottom rows: Tier-3 questions and scenarios, including MANUAL and ERROR rows](screenshots/image_2.png)
+
+*The strict grading in action on a live re-run: MANUAL rows (0/0 atoms) are
+the open-ended prose questions deliberately flagged for human judging, and
+ERROR means the provider API call itself failed mid-run — no answer was
+produced, so the grader refuses to score it. (The result table above quotes
+the saved full run in `llm_eval_out/results.json`, which completed with zero
+errors; live re-runs vary with the provider's API.)*
+
 ---
 
 ## 6. Honest failure analysis (asked for explicitly — and rewarded)

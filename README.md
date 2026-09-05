@@ -11,12 +11,15 @@ calls, and narrates results; every fact, hour, legality verdict and ranking
 comes from a deterministic Python engine with a machine-generated reasoning
 trace. Full rationale and diagram: [solution/ARCHITECTURE.md](solution/ARCHITECTURE.md).
 
-| ![Eval tab — live full run](screenshots/image_1.png) | ![Eval tab — scenario results](screenshots/image_2.png) |
-|---|---|
+![Chat tab — a Tier-3 question answered live](screenshots/chat.png)
+*Chat: the advisor streams each tool call as a plain-language chip
+("→ Ranking legal, costed cover options for captain on P-2291"), with the full
+engine result expandable underneath, and takes voice input via the mic button.*
 
-*The built-in eval runner grading the live advisor against all 44 dataset
-answer keys (screenshots from an early run — before the hardening pass that
-took full runs from 31 to 38 PASS).*
+![Eval tab — full 44-item run graded live](screenshots/eval.png)
+*Eval: the built-in runner grading the live advisor against all 44 dataset
+answer keys (run #9: 33 PASS / 7 PARTIAL / 3 MANUAL / 1 ERROR), with per-item
+atom coverage, tool-call counts, timings, missing atoms and full transcripts.*
 
 ## What's in this repo
 
@@ -70,6 +73,37 @@ dropped. The provider is a `.env` switch (**Claude** or **Sarvam**) behind one
 neutral interface. The dataset is mirrored into SQLite (with JSON fallback),
 which also stores the full eval-run history.
 
+## Architecture at a glance
+
+```
+  Controller ── 🎤 voice ──▶ Sarvam STT ──┐
+      │ text                              ▼
+      ▼                       ┌───────────────────────┐
+  Web UI (web/index.html) ◀──▶│ server.py (stdlib)    │        cli.py ask/chat
+  chat · questions · eval     │ NDJSON stream + REST  │        (same stack, no browser)
+                              └──────────┬────────────┘               │
+                                         ▼                            ▼
+              ┌─────────────────────────────────────────────────────────┐
+              │  AI LAYER  crew_ops/llm/ — provider-agnostic            │
+              │  Claude ◀── .env switch ──▶ Sarvam                      │
+              │  advisor loop: plan → call tools → narrate              │
+              │  + groundedness gate + completeness rounds              │
+              ╞══ 19 typed tools (crew_ops/tools.py) — THE BOUNDARY ════╡
+              │  DETERMINISTIC ENGINE — pure Python                     │
+              │  query (Tier 1) · simulation (Tier 2) · recommender     │
+              │  (Tier 3) → rules engine: 7 pure checks, every verdict  │
+              │  with its arithmetic trace                              │
+              │  world state: in-memory indexes, copy-on-write overlays │
+              └──────────────────────────┬──────────────────────────────┘
+                                         ▼
+              SQLite (crew_ops.db): dataset mirror (JSON fallback)
+              + full eval-run history
+```
+
+Everything above the double line is language; everything below it is
+arithmetic. The full diagram and the trade-off analysis behind it:
+[solution/ARCHITECTURE.md](solution/ARCHITECTURE.md).
+
 ## Results
 
 - **Engine:** 41/41 automated answer-key checks (the 3 open-ended prose
@@ -119,7 +153,7 @@ argument normalization at the tool boundary, continuation stitching, context
 compaction, groundedness + completeness correction rounds, and a deterministic
 "[completeness check]" addendum that appends any still-missing tool facts.
 That took full-run scores from 31 to 38 PASS, but it is a mitigation, not a
-proof: a later full run scored 32 PASS on the same code. The honest statement
+proof: the final full run scored 33 PASS on the same code. The honest statement
 is that **correctness lives below the tool boundary and is guaranteed
 (41/41); faithful recitation above it is measured, not guaranteed** — which is
 exactly why every answer ships with the expandable engine trace, so the

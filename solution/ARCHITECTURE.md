@@ -315,8 +315,8 @@ catalog in [EVALS.md](EVALS.md):
    literally appear in the prose answer. Every run is recorded in SQLite.
    Results: **best full 44-item run 38 PASS + 3 MANUAL + 2 PARTIAL + 1
    ERROR** (Sarvam `sarvam-105b`); every auto-graded item has passed in at
-   least one recorded run; run-to-run variance remains (a later full run
-   scored 32 PASS) — see §7.
+   least one recorded run; run-to-run variance remains (the final full run
+   scored 33 PASS) — see §7.
 3. **Unit tests** (124, `python3 -m pytest tests/`, <1 s, fully offline —
    the AI layer is tested against a fake provider): pinned to the engineered
    facts — C-2087 breaches DUTY-02 by exactly 1h20m, C-3310 covers P-2291 at

@@ -61,6 +61,26 @@ Troubleshooting: a Claude "cannot reach the Claude API … Decompressor.decompre
 The dataset directory is auto-discovered (any `**/data/flights.json` under the
 repo); override with `CREW_OPS_DATA=/path/to/data`.
 
+### The web UI
+
+```bash
+python3 server.py                   # -> http://127.0.0.1:8765 (or: server.py <port>)
+```
+
+Four tabs, all over the same engine + AI layer as the CLI (stdlib only, no
+extra dependencies):
+
+- **Chat** — multi-turn advisor chatbot; tool calls stream in live as chips,
+  with the full engine results expandable under each answer.
+- **Questions / Scenarios** — every item from `questions.json` (filterable by
+  tier) and `scenarios.json`, with expected answers / answer keys expandable,
+  and a one-click **Test in chat** on each card.
+- **Eval** — trigger the LLM eval (full run, per-tier, scenarios only, or a
+  custom id list) and watch live progress: PASS/PARTIAL/MANUAL/ERROR counts,
+  atom coverage, per-item missing atoms and transcripts. Results persist to
+  `llm_eval_out/results.json` (same format as `run_llm_eval.py`) and the last
+  saved run is shown on load.
+
 ## Layout
 
 | File | What it is |
@@ -75,6 +95,7 @@ repo); override with `CREW_OPS_DATA=/path/to/data`.
 | `crew_ops/regression.py` | Maps all 38 questions + 6 scenarios to engine calls and diffs against the answer keys |
 | `cli.py` | Demo / tool shell (no LLM needed) + `ask`/`chat` advisor commands |
 | `run_regression.py` | Scoreboard |
+| `server.py` + `web/index.html` | Local web UI: chat, question/scenario browser, eval runner (stdlib HTTP server) |
 | `tests/` | Unit tests pinned to the engineered facts + full answer-key regression |
 
 ## How the AI layer works

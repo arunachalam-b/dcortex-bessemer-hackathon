@@ -234,7 +234,7 @@ class SarvamProvider(Provider):
     name = "sarvam"
 
     def __init__(self, api_key: str, model: str = SARVAM_DEFAULT_MODEL,
-                 max_tokens: int = 4096,
+                 max_tokens: int = 8192,
                  reasoning_effort: Optional[str] = None, timeout: int = 120):
         self.api_key = api_key
         self.model = model

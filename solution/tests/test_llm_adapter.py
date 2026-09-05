@@ -202,6 +202,21 @@ def test_advisor_relays_tool_refusal(world):
     assert refusal["ok"] is False and "unknown tool" in refusal["error"]
 
 
+def test_advisor_retries_text_leaked_tool_calls(world):
+    fake = FakeProvider([
+        Turn(text="<tool_call>lookup_crew ...</tool_call>"),
+        Turn(text="", tool_calls=[ToolCall("t1", "lookup_crew",
+                                           {"crew_id": "C-1042"})]),
+        Turn(text="C-1042 is a Captain."),
+    ])
+    advisor = Advisor(world, fake)
+    answer = advisor.ask("Who is C-1042?")
+    assert "<tool_call" not in answer and "C-1042" in answer
+    # the corrective nudge landed in the history as a user turn
+    assert any(m["role"] == "user" and "NOT executed" in m["text"]
+               for m in advisor.history)
+
+
 def test_advisor_stops_at_step_budget(world):
     fake = FakeProvider([Turn(text="", tool_calls=[ToolCall("t1", "lookup_crew",
                                                             {"crew_id": "C-1042"})])

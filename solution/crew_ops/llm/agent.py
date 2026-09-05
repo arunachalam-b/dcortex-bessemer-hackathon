@@ -36,6 +36,14 @@ rules that excluded candidates.
 - If no tool can answer (out of scope, missing data), say plainly that you cannot \
 answer reliably from the data you have, and why. A tool response with ok=false is \
 such an answer: relay the error, do not improvise.
+- A tail number VT-XXX is an aircraft, never a crew member: resolve "the VT-DXE \
+captain" by calling get_pairing with aircraft="VT-DXE" and the date, then read the \
+pairing's crew. Disruptions on an aircraft's pairing are resolved the same way.
+- Tools are invoked ONLY through the tool-calling interface. Never write tool-call \
+markup or JSON in your answer text — it will not be executed.
+- When you present options, list EVERY legal option the engine returned, each with \
+its cost in INR and delay, in the engine's rank order — plus the key excluded \
+candidates with the exact rule that excluded them.
 - Be concise and operational: the decision first, then the key numbers, then caveats."""
 
 _ID_PATTERNS = (re.compile(r"\bC-\d{3,5}\b"), re.compile(r"\bP-\d{3,5}\b"),
@@ -72,6 +80,16 @@ class Advisor:
                                for c in turn.tool_calls],
                 "raw": turn.raw, "provider": self.provider.name})
             if not turn.tool_calls:
+                # A model that writes tool-call markup as text executed nothing:
+                # push it back to the real interface instead of showing the leak.
+                if "<tool_call" in (turn.text or "") or '"tool_call"' in (turn.text or ""):
+                    self.on_event("retry", {"reason": "tool call written as text"})
+                    self.history.append({
+                        "role": "user",
+                        "text": "Those tool calls were written as plain text and "
+                                "were NOT executed. Invoke the tools through the "
+                                "tool-calling interface, then answer."})
+                    continue
                 return self._finalize(turn.text)
             results = []
             for c in turn.tool_calls:

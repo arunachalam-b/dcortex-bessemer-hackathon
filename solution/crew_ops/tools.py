@@ -38,6 +38,33 @@ def _dt(v: Optional[str]) -> Optional[datetime]:
     return parse_utc(v) if v else None
 
 
+# The model writes what the controller typed ("captain", "blr", "c-1042");
+# the engine stores canonical forms. Normalize here, at the boundary, so a
+# casing mismatch can never silently return an empty (and wrong) result.
+
+_RANKS = {"captain": "Captain", "capt": "Captain", "cpt": "Captain",
+          "first officer": "First Officer", "fo": "First Officer",
+          "f/o": "First Officer", "first-officer": "First Officer",
+          "senior cabin crew": "Senior Cabin Crew", "scc": "Senior Cabin Crew",
+          "senior cc": "Senior Cabin Crew",
+          "cabin crew": "Cabin Crew", "cc": "Cabin Crew", "cabin": "Cabin Crew"}
+
+
+def _rank(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    key = " ".join(v.strip().lower().replace("_", " ").split())
+    if key not in _RANKS:
+        raise ValueError(f"unknown rank/role '{v}'; expected one of: Captain, "
+                         "First Officer, Senior Cabin Crew, Cabin Crew")
+    return _RANKS[key]
+
+
+def _up(v: Optional[str]) -> Optional[str]:
+    """Stations, aircraft, ratings and dataset ids are upper-case."""
+    return v.upper() if isinstance(v, str) else v
+
+
 def tool_schemas() -> list:
     """JSON-schema-style tool definitions for any LLM adapter."""
     return [{
@@ -57,7 +84,7 @@ def dispatch(world: World, name: str, args: Optional[dict] = None) -> dict:
     t = _REGISTRY[name]
     try:
         result = t["fn"](world, **args)
-    except (KeyError, ValueError, TypeError) as e:
+    except Exception as e:  # errors are answers too — never leak an exception
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
                 "hint": "check ids/dates against the dataset; this tool cannot "
                         "answer reliably with these arguments"}
@@ -74,8 +101,12 @@ def dispatch(world: World, name: str, args: Optional[dict] = None) -> dict:
         "rank": {"type": "string"}, "base": {"type": "string"},
         "status": {"type": "string"}, "rating": {"type": "string"}},
        ["crew.json"])
-def _lookup_crew(world, **kw):
-    return Q.lookup_crew(world, **kw)
+def _lookup_crew(world, crew_id=None, name=None, rank=None, base=None,
+                 status=None, rating=None):
+    return Q.lookup_crew(world, crew_id=_up(crew_id), name=name,
+                         rank=_rank(rank), base=_up(base),
+                         status=status.lower() if status else None,
+                         rating=_up(rating))
 
 
 @_tool("lookup_flights", "Filter the flight schedule.",
@@ -84,7 +115,8 @@ def _lookup_crew(world, **kw):
         "aircraft": {"type": "string"}},
        ["flights.json"])
 def _lookup_flights(world, date=None, **kw):
-    return Q.lookup_flights(world, on=_date(date), **kw)
+    return Q.lookup_flights(world, on=_date(date),
+                            **{k: _up(v) for k, v in kw.items()})
 
 
 @_tool("get_duty_clock",
@@ -94,14 +126,14 @@ def _lookup_flights(world, date=None, **kw):
         "end_date": {"type": "string"}},
        ["duty_clocks.json", "rosters.json", "rules.json"])
 def _duty_clock(world, crew_id, end_date=None):
-    return Q.duty_clock(world, crew_id, _date(end_date))
+    return Q.duty_clock(world, _up(crew_id), _date(end_date))
 
 
 @_tool("get_reserves", "Reserve pool with on-call windows, filtered by base/date.",
        {"base": {"type": "string"}, "date": {"type": "string"}},
        ["reserve_pool.json", "crew.json"])
 def _reserves(world, base=None, date=None):
-    return Q.reserves(world, base=base, on=_date(date))
+    return Q.reserves(world, base=_up(base), on=_date(date))
 
 
 @_tool("get_certifications",
@@ -110,14 +142,15 @@ def _reserves(world, base=None, date=None):
         "expiring_to": {"type": "string"}},
        ["certifications.json"])
 def _certs(world, crew_id=None, expiring_from=None, expiring_to=None):
-    return Q.certifications(world, crew_id, _date(expiring_from), _date(expiring_to))
+    return Q.certifications(world, _up(crew_id), _date(expiring_from),
+                            _date(expiring_to))
 
 
 @_tool("get_risk_signals", "Pre-computed disruption-risk scores (provided input).",
        {"crew_id": {"type": "string"}, "min_score": {"type": "number"}},
        ["risk_signals.json"])
 def _risks(world, crew_id=None, min_score=0.0):
-    return Q.risk_signals(world, crew_id, min_score)
+    return Q.risk_signals(world, _up(crew_id), min_score)
 
 
 @_tool("get_pairing", "Pairings with days, flights, report/release and crew.",
@@ -125,7 +158,8 @@ def _risks(world, crew_id=None, min_score=0.0):
         "aircraft": {"type": "string"}, "date": {"type": "string"}},
        ["rosters.json"])
 def _pairing(world, pairing_id=None, crew_id=None, aircraft=None, date=None):
-    return Q.pairing_info(world, pairing_id, crew_id, aircraft, _date(date))
+    return Q.pairing_info(world, _up(pairing_id), _up(crew_id), _up(aircraft),
+                          _date(date))
 
 
 @_tool("get_duty_watchlist",
@@ -146,7 +180,8 @@ def _watchlist(world, end_date, threshold=45.0):
         "pairing_id": {"type": "string"}, "reported_utc": {"type": "string"}},
        ["rosters.json", "flights.json"])
 def _sick(world, crew_id, pairing_id=None, reported_utc=None):
-    return S.sick_crew_impact(world, crew_id, pairing_id, _dt(reported_utc))
+    return S.sick_crew_impact(world, _up(crew_id), _up(pairing_id),
+                              _dt(reported_utc))
 
 
 @_tool("simulate_station_closure",
@@ -156,7 +191,7 @@ def _sick(world, crew_id, pairing_id=None, reported_utc=None):
         "window_end_utc": {"type": "string", "required": True}},
        ["flights.json", "rosters.json", "rules.json"])
 def _closure(world, station, window_start_utc, window_end_utc):
-    return S.station_closure_impact(world, station, _dt(window_start_utc),
+    return S.station_closure_impact(world, _up(station), _dt(window_start_utc),
                                     _dt(window_end_utc))
 
 
@@ -168,7 +203,7 @@ def _closure(world, station, window_start_utc, window_end_utc):
         "delay_hours": {"type": "number", "required": True}},
        ["flights.json", "rosters.json", "rules.json"])
 def _delay(world, aircraft, date, delay_hours):
-    return S.delay_impact(world, aircraft, _date(date), delay_hours)
+    return S.delay_impact(world, _up(aircraft), _date(date), delay_hours)
 
 
 @_tool("check_certification_validity",
@@ -177,7 +212,7 @@ def _delay(world, aircraft, date, delay_hours):
         "date": {"type": "string", "required": True}},
        ["certifications.json", "rosters.json"])
 def _cert_check(world, crew_id, date):
-    return S.cert_expiry_impact(world, crew_id, _date(date))
+    return S.cert_expiry_impact(world, _up(crew_id), _date(date))
 
 
 @_tool("check_assignment_legality",
@@ -190,8 +225,10 @@ def _cert_check(world, crew_id, date):
        ["rosters.json", "duty_clocks.json", "certifications.json", "rules.json"])
 def _legality(world, crew_id, pairing_id, exclude_pairing="COVERED",
               delay_hours=0.0, days_from=None):
-    return S.check_assignment(world, crew_id, pairing_id, exclude_pairing,
-                              delay_hours, _date(days_from))
+    if exclude_pairing != "COVERED":
+        exclude_pairing = _up(exclude_pairing)
+    return S.check_assignment(world, _up(crew_id), _up(pairing_id),
+                              exclude_pairing, delay_hours, _date(days_from))
 
 
 @_tool("compute_rest_requirement",
@@ -206,7 +243,7 @@ def _rest(world, release_utc):
        {"flight_id": {"type": "string", "required": True}},
        ["flights.json", "costs.json"])
 def _cancel(world, flight_id):
-    return S.cancellation_impact(world, flight_id)
+    return S.cancellation_impact(world, _up(flight_id))
 
 
 # --------------------- Tier 3: recommendation ---------------------
@@ -222,8 +259,9 @@ def _cancel(world, flight_id):
         "certifications.json", "rules.json", "costs.json"])
 def _recommend(world, pairing_id, role, sick_crew_id=None, days_from=None,
                reported_utc=None):
-    return REC.cover_options(world, pairing_id, role, sick_crew_id,
-                             _date(days_from), _dt(reported_utc))
+    return REC.cover_options(world, _up(pairing_id), _rank(role),
+                             _up(sick_crew_id), _date(days_from),
+                             _dt(reported_utc))
 
 
 @_tool("recommend_joint",
@@ -237,7 +275,13 @@ def _recommend(world, pairing_id, role, sick_crew_id=None, days_from=None,
                                             "days_from": {"type": "string"}}}}},
        ["crew.json", "rosters.json", "reserve_pool.json", "costs.json", "rules.json"])
 def _joint(world, events):
-    events = [{**e, "days_from": _date(e.get("days_from"))} for e in events]
+    if not events or not all(e.get("pairing_id") and e.get("role")
+                             for e in events):
+        raise ValueError("each event needs at least pairing_id and role")
+    events = [{**e, "pairing_id": _up(e.get("pairing_id")),
+               "role": _rank(e.get("role")),
+               "sick_crew_id": _up(e.get("sick_crew_id")),
+               "days_from": _date(e.get("days_from"))} for e in events]
     return REC.joint_plan(world, events)
 
 
@@ -249,7 +293,7 @@ def _joint(world, events):
         "delay_hours": {"type": "number", "required": True}},
        ["rosters.json", "rules.json", "costs.json"])
 def _delay_recovery(world, aircraft, date, delay_hours):
-    return REC.delay_recovery(world, aircraft, _date(date), delay_hours)
+    return REC.delay_recovery(world, _up(aircraft), _date(date), delay_hours)
 
 
 @_tool("draft_notification",
@@ -259,4 +303,5 @@ def _delay_recovery(world, aircraft, date, delay_hours):
         "days_from": {"type": "string"}},
        ["rosters.json", "crew.json", "flights.json"])
 def _notify(world, crew_id, pairing_id, days_from=None):
-    return REC.draft_notification(world, crew_id, pairing_id, _date(days_from))
+    return REC.draft_notification(world, _up(crew_id), _up(pairing_id),
+                                  _date(days_from))

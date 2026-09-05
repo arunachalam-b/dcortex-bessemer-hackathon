@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 .env
 llm_eval_out/
+crew_ops.db*

@@ -5,13 +5,43 @@ a deterministic engine below the tool boundary, and a provider-agnostic AI
 layer above it. The LLM provider (**Claude** or **Sarvam**) is a `.env`
 switch, not a code change.
 
+## Architecture at a glance
+
+```
+  Controller ── 🎤 voice ──▶ Sarvam STT ──┐
+      │ text                              ▼
+      ▼                       ┌───────────────────────┐
+  Web UI (web/index.html) ◀──▶│ server.py (stdlib)    │        cli.py ask/chat
+  chat · questions · eval     │ NDJSON stream + REST  │        (same stack, no browser)
+                              └──────────┬────────────┘               │
+                                         ▼                            ▼
+              ┌─────────────────────────────────────────────────────────┐
+              │  AI LAYER  crew_ops/llm/ — provider-agnostic            │
+              │  Claude ◀── .env switch ──▶ Sarvam                      │
+              │  advisor loop: plan → call tools → narrate              │
+              │  + groundedness gate + completeness rounds              │
+              ╞══ 19 typed tools (crew_ops/tools.py) — THE BOUNDARY ════╡
+              │  DETERMINISTIC ENGINE — pure Python                     │
+              │  query (Tier 1) · simulation (Tier 2) · recommender     │
+              │  (Tier 3) → rules engine: 7 pure checks, every verdict  │
+              │  with its arithmetic trace                              │
+              │  world state: in-memory indexes, copy-on-write overlays │
+              └──────────────────────────┬──────────────────────────────┘
+                                         ▼
+              SQLite (crew_ops.db): dataset mirror (JSON fallback)
+              + full eval-run history
+```
+
+Everything above the double line is language; everything below it is
+arithmetic. Full diagram and rationale: [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Status
 
 - **41/41** automated checks against the dataset's own answer keys pass:
   all 16 Tier-1, all 14 Tier-2 minus 1 open-ended, all 8 Tier-3 minus 2
   open-ended questions, and all 6 scenarios (S1–S6). The 3 open-ended prose
   questions (Q30/Q36/Q38) are flagged for human judging, never auto-passed.
-- **121 pytest tests** green (`python3 -m pytest tests/`), runtime < 1 s —
+- **124 pytest tests** green (`python3 -m pytest tests/`), runtime < 1 s —
   including the AI layer (config, both wire formats, advisor loop,
   groundedness gate), all offline via a fake provider.
 - Engine + Sarvam path: Python 3.9+ stdlib only. Claude path additionally
@@ -61,6 +91,34 @@ Troubleshooting: a Claude "cannot reach the Claude API … Decompressor.decompre
 The dataset directory is auto-discovered (any `**/data/flights.json` under the
 repo); override with `CREW_OPS_DATA=/path/to/data`.
 
+### The web UI
+
+```bash
+python3 server.py                   # -> http://127.0.0.1:8765 (or: server.py <port>)
+```
+
+Four tabs, all over the same engine + AI layer as the CLI (stdlib only, no
+extra dependencies):
+
+- **Chat** — multi-turn advisor chatbot; tool calls stream in live as chips,
+  with the full engine results expandable under each answer.
+- **Questions / Scenarios** — every item from `questions.json` (filterable by
+  tier) and `scenarios.json`, with expected answers / answer keys expandable,
+  and a one-click **Test in chat** on each card.
+- **Eval** — trigger the LLM eval (full run, per-tier, scenarios only, or a
+  custom id list) and watch live progress: PASS/PARTIAL/MANUAL/ERROR counts,
+  atom coverage, per-item missing atoms and transcripts. Results persist to
+  `llm_eval_out/results.json` (same format as `run_llm_eval.py`) and the last
+  saved run is shown on load.
+
+![Chat tab](../screenshots/chat.png)
+*Chat: tool calls stream as plain-language chips, full engine results
+expandable, voice input via the mic button.*
+
+![Eval tab](../screenshots/eval.png)
+*Eval: a full 44-item run graded live against the answer keys, with per-item
+atom coverage, timings and missing atoms.*
+
 ## Layout
 
 | File | What it is |
@@ -75,6 +133,7 @@ repo); override with `CREW_OPS_DATA=/path/to/data`.
 | `crew_ops/regression.py` | Maps all 38 questions + 6 scenarios to engine calls and diffs against the answer keys |
 | `cli.py` | Demo / tool shell (no LLM needed) + `ask`/`chat` advisor commands |
 | `run_regression.py` | Scoreboard |
+| `server.py` + `web/index.html` | Local web UI: chat, question/scenario browser, eval runner (stdlib HTTP server) |
 | `tests/` | Unit tests pinned to the engineered facts + full answer-key regression |
 
 ## How the AI layer works

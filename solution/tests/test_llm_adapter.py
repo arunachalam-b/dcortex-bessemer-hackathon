@@ -184,11 +184,36 @@ def test_advisor_runs_tools_then_answers(world):
 
 
 def test_advisor_flags_ungrounded_ids(world):
-    fake = FakeProvider([Turn(text="Assign C-9999 to P-2291.")])
+    # An ungrounded id earns one corrective push-back; if the model insists,
+    # the deterministic warning is appended.
+    fake = FakeProvider([Turn(text="Assign C-9999 to P-2291."),
+                         Turn(text="Assign C-9999 to P-2291.")])
     advisor = Advisor(world, fake)
     answer = advisor.ask("Who should cover P-2291?")  # P-2291 comes from the user
     assert "[groundedness check]" in answer and "C-9999" in answer
     assert "P-2291" not in answer.split("[groundedness check]")[1]
+    assert any(m["role"] == "user" and "appear in no tool result" in m["text"]
+               for m in advisor.history)
+
+
+def test_advisor_correction_round_can_fix_ungrounded_ids(world):
+    fake = FakeProvider([Turn(text="Assign C-9999 to P-2291."),
+                         Turn(text="I cannot verify a legal cover from the data.")])
+    advisor = Advisor(world, fake)
+    answer = advisor.ask("Who should cover P-2291?")
+    assert "[groundedness check]" not in answer and "C-9999" not in answer
+
+
+def test_advisor_continues_truncated_answers(world):
+    fake = FakeProvider([
+        Turn(text="The ranked options are: first,", stop_reason="max_tokens"),
+        Turn(text=" second and third."),
+    ])
+    advisor = Advisor(world, fake)
+    answer = advisor.ask("Rank the options")
+    assert answer == "The ranked options are: first, second and third."
+    assert any(m["role"] == "user" and "cut off" in m["text"]
+               for m in advisor.history)
 
 
 def test_advisor_relays_tool_refusal(world):
@@ -200,6 +225,21 @@ def test_advisor_relays_tool_refusal(world):
     advisor.ask("Do something odd")
     refusal = advisor.history[2]["results"][0]["content"]
     assert refusal["ok"] is False and "unknown tool" in refusal["error"]
+
+
+def test_advisor_retries_text_leaked_tool_calls(world):
+    fake = FakeProvider([
+        Turn(text="<tool_call>lookup_crew ...</tool_call>"),
+        Turn(text="", tool_calls=[ToolCall("t1", "lookup_crew",
+                                           {"crew_id": "C-1042"})]),
+        Turn(text="C-1042 is a Captain."),
+    ])
+    advisor = Advisor(world, fake)
+    answer = advisor.ask("Who is C-1042?")
+    assert "<tool_call" not in answer and "C-1042" in answer
+    # the corrective nudge landed in the history as a user turn
+    assert any(m["role"] == "user" and "NOT executed" in m["text"]
+               for m in advisor.history)
 
 
 def test_advisor_stops_at_step_budget(world):

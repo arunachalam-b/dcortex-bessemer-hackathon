@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew Ops Advisor</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2b3442;
+    --text: #e6edf3; --muted: #8b98a9; --accent: #4da3ff; --accent2: #7ee2b8;
+    --pass: #2ea36b; --partial: #d29922; --error: #e5534b; --manual: #8957e5;
+    --user: #1f3a5f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10; flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  .badge {
+    font-size: 12px; padding: 2px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  }
+  .badge.ok { color: var(--accent2); border-color: #2d4a3e; }
+  .badge.err { color: var(--error); border-color: #5c2f2c; }
+  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav button {
+    background: none; border: 1px solid transparent; color: var(--muted);
+    padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 14px;
+  }
+  nav button.active { background: var(--panel2); color: var(--text); border-color: var(--border); }
+  nav button:hover { color: var(--text); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .banner {
+    background: #2d1f1e; border: 1px solid #5c2f2c; color: #f0b9b5;
+    padding: 10px 14px; border-radius: 8px; margin-bottom: 16px;
+  }
+
+  /* cards */
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .card .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .card .id { font-weight: 600; color: var(--accent); font-family: ui-monospace, monospace; }
+  .card .prompt { margin: 8px 0; }
+  .tier { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 600; }
+  .tier.t1 { background: #12324a; color: #79c0ff; }
+  .tier.t2 { background: #3a2e12; color: #e3b341; }
+  .tier.t3 { background: #3a1e4a; color: #d2a8ff; }
+  .tier.sc { background: #143a2c; color: #7ee2b8; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  pre {
+    background: #0a0e14; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; overflow-x: auto; font-size: 12px; margin: 8px 0 0;
+    font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+  }
+  .btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: #1f4470; border-color: #2b5c96; }
+  .btn.primary:hover { background: #265589; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .filters .btn.on { border-color: var(--accent); color: var(--accent); }
+  .explain { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .rules { margin-top: 6px; }
+  .rule { font-size: 11px; font-family: ui-monospace, monospace; background: #21262d;
+          border-radius: 6px; padding: 1px 7px; margin-right: 5px; color: var(--muted); }
+
+  /* chat */
+  #chatlog { min-height: 300px; max-height: calc(100vh - 300px); overflow-y: auto;
+             padding: 4px; margin-bottom: 12px; }
+  .msg { max-width: 85%; margin-bottom: 12px; padding: 10px 14px; border-radius: 12px;
+         white-space: pre-wrap; overflow-wrap: break-word; }
+  .msg.user { background: var(--user); margin-left: auto; border-bottom-right-radius: 4px; }
+  .msg.bot { background: var(--panel); border: 1px solid var(--border);
+             border-bottom-left-radius: 4px; white-space: normal; }
+  .msg.bot p { margin: 0 0 8px; } .msg.bot p:last-child { margin-bottom: 0; }
+  .msg.err { background: #2d1f1e; border: 1px solid #5c2f2c; color: #f0b9b5; }
+  .toolchip {
+    display: inline-block; font-size: 12px;
+    background: #1a2634; border: 1px solid #27405c; color: #9ecbff;
+    border-radius: 999px; padding: 2px 10px; margin: 2px 4px 2px 0;
+  }
+  .toolchip b { color: #79c0ff; font-weight: 600; font-family: ui-monospace, monospace; }
+  .toolchip.bad { border-color: #5c2f2c; color: #f0b9b5; }
+  .toolchip.bad b { color: #e5534b; }
+  .toolchip .note { color: var(--muted); font-style: italic; }
+  .toolrow { margin-bottom: 10px; max-width: 85%; }
+  .typing { color: var(--muted); font-style: italic; margin-bottom: 12px; }
+  #chatform { display: flex; gap: 8px; }
+  #chatinput {
+    flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; font: inherit; resize: vertical; min-height: 44px;
+  }
+  #chatinput:focus { outline: none; border-color: var(--accent); }
+  #micbtn { min-width: 52px; }
+  #micbtn.rec { border-color: var(--error); color: var(--error);
+                animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+
+  /* eval */
+  .evalbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  #evalids { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+             border-radius: 8px; padding: 7px 10px; font: inherit; width: 260px; }
+  .progress { height: 8px; background: var(--panel2); border-radius: 999px; overflow: hidden;
+              margin: 10px 0; }
+  .progress > div { height: 100%; background: var(--accent); transition: width .4s; width: 0; }
+  .summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+          padding: 8px 16px; text-align: center; min-width: 90px; }
+  .stat b { display: block; font-size: 20px; }
+  .stat.PASS b { color: var(--pass); } .stat.PARTIAL b { color: var(--partial); }
+  .stat.ERROR b { color: var(--error); } .stat.MANUAL b { color: var(--manual); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border);
+           font-size: 13px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 57px; background: var(--bg); }
+  .st { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+  .st.PASS { background: #12351f; color: #56d364; }
+  .st.PARTIAL { background: #3a2e12; color: #e3b341; }
+  .st.ERROR { background: #3d1a17; color: #ff7b72; }
+  .st.MANUAL { background: #2c1e42; color: #d2a8ff; }
+  .st.INFO { background: #21262d; color: var(--muted); }
+  #tab-eval { position: relative; }
+  #legendbtn { margin-left: auto; border-radius: 999px; width: 30px; height: 30px;
+               padding: 0; font-size: 15px; color: var(--muted); }
+  #legendbtn:hover, #legendbtn.open { color: var(--accent); border-color: var(--accent); }
+  .legend { display: none; position: absolute; right: 0; top: 44px; z-index: 30;
+            max-width: 560px; box-shadow: 0 10px 30px rgba(0,0,0,.55); }
+  .legend.open { display: block; }
+  .legend div { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
+  .legend .st { margin-right: 4px; }
+  #runsel { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+            border-radius: 8px; padding: 7px 10px; font: inherit; max-width: 480px; }
+  .miss { color: var(--partial); font-family: ui-monospace, monospace; font-size: 12px; }
+  td .btn { padding: 2px 10px; font-size: 12px; }
+  .muted { color: var(--muted); }
+  code { background: #21262d; border-radius: 4px; padding: 1px 5px;
+         font-family: ui-monospace, monospace; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Crew<span>Ops</span> Advisor</h1>
+  <span class="badge" id="providerBadge">connecting…</span>
+  <span class="badge" id="snapshotBadge"></span>
+  <nav>
+    <button data-tab="chat" class="active">Chat</button>
+    <button data-tab="questions">Questions</button>
+    <button data-tab="scenarios">Scenarios</button>
+    <button data-tab="eval">Eval</button>
+  </nav>
+</header>
+<main>
+  <div id="banner" class="banner" style="display:none"></div>
+
+  <section id="tab-chat" class="tab active">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+      <button class="btn" id="newchat">New chat</button>
+    </div>
+    <div id="chatlog">
+      <div class="muted" id="chathint">Ask anything about the operation — e.g.
+        “Who is on reserve at BLR tomorrow?” or “Captain C-1042 is sick for P-2291,
+        what do I do?” — or pick a question/scenario from the other tabs.</div>
+    </div>
+    <form id="chatform">
+      <textarea id="chatinput" rows="2" placeholder="Message the advisor… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button class="btn" id="micbtn" type="button" title="Speak your question — transcribed with Sarvam speech-to-text">&#127908;</button>
+      <button class="btn primary" id="sendbtn" type="submit">Send</button>
+    </form>
+  </section>
+
+  <section id="tab-questions" class="tab">
+    <div class="filters" id="qfilters">
+      <button class="btn on" data-tier="all">All</button>
+      <button class="btn" data-tier="1">Tier 1</button>
+      <button class="btn" data-tier="2">Tier 2</button>
+      <button class="btn" data-tier="3">Tier 3</button>
+    </div>
+    <div id="qlist"></div>
+  </section>
+
+  <section id="tab-scenarios" class="tab">
+    <div id="slist"></div>
+  </section>
+
+  <section id="tab-eval" class="tab">
+    <div class="evalbar">
+      <button class="btn primary" data-run="all">Run full eval</button>
+      <button class="btn" data-run="t1">Tier 1</button>
+      <button class="btn" data-run="t2">Tier 2</button>
+      <button class="btn" data-run="t3">Tier 3</button>
+      <button class="btn" data-run="sc">Scenarios</button>
+      <input id="evalids" placeholder="or ids: Q01 Q05 S2">
+      <button class="btn" data-run="ids">Run ids</button>
+      <span class="muted" id="evalnote"></span>
+      <button class="btn" id="legendbtn" title="How to read these results">&#9432;</button>
+    </div>
+    <div class="card legend" id="evallegend">
+      <b style="font-size:12px;color:var(--muted);letter-spacing:.4px">HOW TO READ THESE RESULTS</b>
+      <div><span class="st PASS">PASS</span> every key fact ("atom") from the answer key — crew/pairing/flight/rule ids and numbers — appears in the advisor's answer.</div>
+      <div><span class="st PARTIAL">PARTIAL</span> an answer was produced but some expected atoms weren't recited (e.g. it named the best option without listing every ranked cost). Usually correct-but-terse under strict grading, worth a skim.</div>
+      <div><span class="st MANUAL">MANUAL</span> free-form judgement item (Q30, Q36, Q38) with no mechanical answer key — a human reads and grades it.</div>
+      <div><span class="st ERROR">ERROR</span> the AI provider failed for this item; no answer was produced.</div>
+      <div><span class="st INFO">Atoms</span> key facts found / expected for the item; <b>atom coverage</b> is the overall % found across auto-graded items.</div>
+    </div>
+    <div class="evalbar">
+      <span class="muted">Run history:</span>
+      <select id="runsel"><option value="">Latest result</option></select>
+    </div>
+    <div class="progress" id="evalprog" style="display:none"><div></div></div>
+    <div class="summary" id="evalsummary"></div>
+    <div style="overflow-x:auto">
+      <table id="evaltable" style="display:none">
+        <thead><tr>
+          <th>Item</th><th>Status</th><th>Atoms</th><th>Tools</th><th>Time</th>
+          <th>Missing atoms</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="evaldetail"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// minimal markdown: bold, code, paragraphs/line breaks
+function md(s) {
+  return esc(s).split(/\n{2,}/).map(p =>
+    "<p>" + p
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\n/g, "<br>") + "</p>").join("");
+}
+
+let META = null, DATA = null;
+let sessionId = crypto.randomUUID();
+
+/* ---------- tabs ---------- */
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function showTab(name) {
+  document.querySelectorAll("nav button").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach(t =>
+    t.classList.toggle("active", t.id === "tab-" + name));
+  if (name === "eval") { loadRuns(); pollEval(); }
+}
+
+/* ---------- boot ---------- */
+async function boot() {
+  META = await (await fetch("/api/meta")).json();
+  const pb = $("#providerBadge");
+  if (META.provider) {
+    pb.textContent = `AI: ${META.provider} · ${META.model}`;
+    pb.className = "badge ok";
+  } else {
+    pb.textContent = "AI layer not configured";
+    pb.className = "badge err";
+    $("#banner").style.display = "";
+    $("#banner").textContent = META.error +
+      " — you can still browse questions and scenarios.";
+  }
+  $("#snapshotBadge").textContent = "snapshot now: " + META.snapshot_now;
+  DATA = await (await fetch("/api/dataset")).json();
+  renderQuestions("all");
+  renderScenarios();
+  loadRuns();
+  pollEval();
+}
+boot();
+
+/* ---------- questions ---------- */
+$("#qfilters").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#qfilters .btn").forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  renderQuestions(b.dataset.tier);
+});
+
+function renderQuestions(tier) {
+  const list = DATA.questions.filter(q => tier === "all" || String(q.tier) === tier);
+  $("#qlist").innerHTML = list.map(q => `
+    <div class="card">
+      <div class="head">
+        <span class="id">${q.question_id}</span>
+        <span class="tier t${q.tier}">Tier ${q.tier}</span>
+        <span style="margin-left:auto"></span>
+        <button class="btn primary" onclick="testInChat('${q.question_id}')">Test in chat</button>
+      </div>
+      <div class="prompt">${esc(q.prompt)}</div>
+      <div class="explain">${esc(q.explanation)}</div>
+      <div class="rules">${(q.rules_ref||[]).map(r => `<span class="rule">${esc(r)}</span>`).join("")}</div>
+      <details><summary>Expected answer</summary><pre>${esc(JSON.stringify(q.expected_answer, null, 1))}</pre></details>
+    </div>`).join("");
+}
+
+/* ---------- scenarios ---------- */
+function renderScenarios() {
+  $("#slist").innerHTML = DATA.scenarios.map(s => `
+    <div class="card">
+      <div class="head">
+        <span class="id">${s.scenario_id}</span>
+        <span class="tier sc">${esc(s.difficulty)}</span>
+        <b>${esc(s.title)}</b>
+        <span style="margin-left:auto"></span>
+        <button class="btn primary" onclick="testInChat('${s.scenario_id}')">Test in chat</button>
+      </div>
+      <div class="prompt">${esc(s.event.narrative)}</div>
+      <details><summary>Event JSON</summary><pre>${esc(JSON.stringify(s.event, null, 1))}</pre></details>
+      <details><summary>Answer key</summary><pre>${esc(JSON.stringify(s.answer_key, null, 1))}</pre></details>
+    </div>`).join("");
+}
+
+function promptFor(id) {
+  const q = DATA.questions.find(q => q.question_id === id);
+  if (q) return q.prompt;
+  const s = DATA.scenarios.find(s => s.scenario_id === id);
+  return s ? s.prompt : null;
+}
+
+function testInChat(id) {
+  const p = promptFor(id);
+  if (!p) return;
+  showTab("chat");
+  sendMessage(p);
+}
+
+/* ---------- chat ---------- */
+$("#newchat").onclick = async () => {
+  await fetch("/api/chat/reset", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({session_id: sessionId})});
+  sessionId = crypto.randomUUID();
+  $("#chatlog").innerHTML = '<div class="muted">New conversation started.</div>';
+};
+
+$("#chatform").onsubmit = e => {
+  e.preventDefault();
+  const text = $("#chatinput").value.trim();
+  if (text) { $("#chatinput").value = ""; sendMessage(text); }
+};
+$("#chatinput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("#chatform").requestSubmit();
+  }
+});
+
+function chatAppend(html) {
+  const log = $("#chatlog");
+  const hint = $("#chathint"); if (hint) hint.remove();
+  log.insertAdjacentHTML("beforeend", html);
+  log.scrollTop = log.scrollHeight;
+  return log.lastElementChild;
+}
+
+async function sendMessage(text) {
+  if ($("#sendbtn").disabled) return;
+  $("#sendbtn").disabled = true;
+  chatAppend(`<div class="msg user">${esc(text)}</div>`);
+  const toolrow = chatAppend(`<div class="toolrow"></div>`);
+  const typing = chatAppend(`<div class="typing">advisor is thinking…</div>`);
+  try {
+    const resp = await fetch("/api/chat", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({session_id: sessionId, message: text})});
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({error: resp.statusText}));
+      throw new Error(err.error || resp.statusText);
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (line.trim()) handleChatEvent(JSON.parse(line), toolrow);
+      }
+    }
+  } catch (e) {
+    chatAppend(`<div class="msg err">${esc(e.message)}</div>`);
+  } finally {
+    typing.remove();
+    if (!toolrow.children.length) toolrow.remove();
+    $("#sendbtn").disabled = false;
+    $("#chatinput").focus();
+  }
+}
+
+/* ---------- voice input (recorded here, transcribed by Sarvam STT) ---------- */
+let rec = null, recChunks = [], recStream = null, recTimer = null, recT0 = 0;
+
+$("#micbtn").onclick = async () => {
+  const btn = $("#micbtn");
+  if (rec) { rec.stop(); return; }               // second click = stop
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch {
+    chatAppend(`<div class="msg err">Microphone unavailable — allow mic access to use voice input.</div>`);
+    return;
+  }
+  recChunks = [];
+  rec = new MediaRecorder(recStream);
+  rec.ondataavailable = e => recChunks.push(e.data);
+  rec.onstop = onRecStop;
+  rec.start();
+  recT0 = Date.now();
+  btn.classList.add("rec");
+  btn.textContent = "⏹ 0:00";
+  recTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - recT0) / 1000);
+    btn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }, 250);
+};
+
+async function onRecStop() {
+  const btn = $("#micbtn");
+  clearInterval(recTimer);
+  btn.classList.remove("rec");
+  btn.textContent = "…";
+  btn.disabled = true;
+  recStream.getTracks().forEach(t => t.stop());
+  const blob = new Blob(recChunks, {type: rec.mimeType || "audio/webm"});
+  rec = null;
+  try {
+    if (blob.size < 1000) throw new Error("recording too short — hold the mic a moment longer");
+    const resp = await fetch("/api/transcribe", {method: "POST",
+      headers: {"Content-Type": "audio/wav"}, body: await toWav16k(blob)});
+    const out = await resp.json();
+    if (out.error) throw new Error(out.error);
+    if (!out.transcript) throw new Error("didn’t catch that — try again closer to the mic");
+    const input = $("#chatinput");
+    input.value = (input.value.trim() ? input.value.trim() + " " : "") + out.transcript;
+    input.focus();
+  } catch (e) {
+    chatAppend(`<div class="msg err">voice input: ${esc(e.message)}</div>`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🎤";
+  }
+}
+
+// decode whatever the browser recorded and re-encode as 16 kHz mono PCM WAV
+async function toWav16k(blob) {
+  const ac = new AudioContext();
+  const decoded = await ac.decodeAudioData(await blob.arrayBuffer());
+  ac.close();
+  const rate = 16000;
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+  const src = off.createBufferSource();
+  src.buffer = decoded; src.connect(off.destination); src.start();
+  const mono = (await off.startRendering()).getChannelData(0);
+  const view = new DataView(new ArrayBuffer(44 + mono.length * 2));
+  const str = (o, s) => [...s].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); view.setUint32(4, 36 + mono.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  str(36, "data"); view.setUint32(40, mono.length * 2, true);
+  for (let i = 0; i < mono.length; i++)
+    view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, mono[i])) * 0x7fff, true);
+  return new Blob([view], {type: "audio/wav"});
+}
+
+// plain-language description of what the advisor is doing with each tool call
+function phraseFor(name, a) {
+  a = a || {};
+  const p = {
+    lookup_crew: () => "Looking up crew " + (a.crew_id || a.name ||
+      ("matching " + (Object.entries(a).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ") || "all"))),
+    lookup_flights: () => "Checking the flight schedule" +
+      (a.flight_no ? ` for ${a.flight_no}` : "") + (a.dep_station ? ` from ${a.dep_station}` : "") +
+      (a.arr_station ? ` to ${a.arr_station}` : "") + (a.date ? ` on ${a.date}` : ""),
+    get_duty_clock: () => `Reading ${a.crew_id}'s 7-day duty / 28-day flight-hour clocks`,
+    get_reserves: () => "Listing reserve crew" + (a.base ? ` at ${a.base}` : "") + (a.date ? ` for ${a.date}` : ""),
+    get_certifications: () => "Checking certifications" + (a.crew_id ? ` for ${a.crew_id}` : ""),
+    get_risk_signals: () => "Reading disruption-risk scores" + (a.crew_id ? ` for ${a.crew_id}` : ""),
+    get_pairing: () => "Fetching pairing details" +
+      (a.pairing_id ? ` for ${a.pairing_id}` : a.crew_id ? ` for ${a.crew_id}` : a.aircraft ? ` for ${a.aircraft}` : ""),
+    get_duty_watchlist: () => "Scanning for crew near the 7-day duty limit",
+    simulate_sick_crew: () => `Simulating ${a.crew_id} dropping out` + (a.pairing_id ? ` of ${a.pairing_id}` : ""),
+    simulate_station_closure: () => `Simulating the ${a.station} closure impact, flight by flight`,
+    simulate_delay: () => `Simulating a ${a.delay_hours}h delay for ${a.aircraft}: does the crew's FDP still hold?`,
+    check_certification_validity: () => `Verifying ${a.crew_id} is certified to operate on ${a.date}`,
+    check_assignment_legality: () => `Running the full 7-rule legality check: ${a.crew_id} on ${a.pairing_id}`,
+    compute_rest_requirement: () => "Computing the earliest legal next report after release",
+    cancellation_impact: () => `Costing a cancellation of ${a.flight_id} (passengers + direct cost)`,
+    recommend_cover: () => `Ranking legal, costed cover options for ${a.role || "the open seat"} on ${a.pairing_id}`,
+    recommend_joint: () => `Optimising one joint plan across ${(a.events || []).length || "several"} simultaneous disruptions`,
+    recommend_delay_recovery: () => `Working out a delay-recovery plan for ${a.aircraft} (split / re-crew / cancel)`,
+    draft_notification: () => `Drafting the callout message for ${a.crew_id}`,
+  }[name];
+  return p ? p() : name.replace(/_/g, " ");
+}
+
+function handleChatEvent(ev, toolrow) {
+  if (ev.type === "tool_call") {
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip" title="${esc(ev.name)}(${esc(JSON.stringify(ev.args))})">` +
+      `<b>→</b> ${esc(phraseFor(ev.name, ev.args))}</span>`);
+    $("#chatlog").scrollTop = $("#chatlog").scrollHeight;
+  } else if (ev.type === "tool_result" && !ev.ok) {
+    const chips = toolrow.querySelectorAll(".toolchip");
+    if (chips.length) {
+      const chip = chips[chips.length - 1];
+      chip.classList.add("bad");
+      chip.title = (ev.error || "tool call failed") + " — the advisor sees this and adjusts";
+      chip.insertAdjacentHTML("beforeend",
+        ' <span class="note">— didn’t work, adjusting…</span>');
+    }
+  } else if (ev.type === "retry") {
+    const note = ev.reason === "ungrounded ids"
+      ? "double-checking unverified ids…" : "re-phrasing a tool call…";
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip"><span class="note">${note}</span></span>`);
+  } else if (ev.type === "continue") {
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip"><span class="note">long answer — continuing…</span></span>`);
+  } else if (ev.type === "compact") {
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip"><span class="note">trimming older tool results to fit…</span></span>`);
+  } else if (ev.type === "error") {
+    chatAppend(`<div class="msg err">${esc(ev.error)}</div>`);
+  } else if (ev.type === "answer") {
+    let traceHtml = "";
+    if (ev.trace && ev.trace.length) {
+      traceHtml = `<details><summary>${ev.trace.length} tool call${ev.trace.length > 1 ? "s" : ""} — full results</summary>` +
+        ev.trace.map(t => `<pre><b>${esc(t.name)}</b>\n${esc(JSON.stringify(t.result, null, 1))}</pre>`).join("") +
+        `</details>`;
+    }
+    chatAppend(`<div class="msg bot">${md(ev.answer)}${traceHtml}</div>`);
+  }
+}
+
+/* ---------- eval ---------- */
+$("#legendbtn").onclick = e => {
+  e.stopPropagation();
+  const open = $("#evallegend").classList.toggle("open");
+  $("#legendbtn").classList.toggle("open", open);
+};
+document.addEventListener("click", e => {
+  if (!e.target.closest("#evallegend")) {
+    $("#evallegend").classList.remove("open");
+    $("#legendbtn").classList.remove("open");
+  }
+});
+
+let evalTimer = null;
+let viewingRun = null;      // run_id being inspected, or null = live/latest
+let evalWasRunning = false;
+
+document.querySelectorAll("[data-run]").forEach(b => b.onclick = () => startEval(b.dataset.run));
+
+async function loadRuns() {
+  try {
+    const body = await (await fetch("/api/eval/runs")).json();
+    const sel = $("#runsel");
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Latest result</option>' +
+      (body.runs || []).map(r => {
+        const when = (r.started_utc || "").replace("T", " ").replace("Z", "");
+        const c = r.counts || {};
+        const parts = ["PASS", "PARTIAL", "MANUAL", "ERROR"]
+          .filter(k => c[k]).map(k => `${c[k]} ${k.toLowerCase()}`).join(", ");
+        const state = r.finished_utc ? "" : " — in progress";
+        return `<option value="${r.run_id}">Run #${r.run_id} · ${when} UTC · ` +
+               `${esc(r.model || r.provider || "?")} · ${parts || `${r.done}/${r.total}`}${state}</option>`;
+      }).join("");
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  } catch (e) { /* no history available — latest-result view still works */ }
+}
+
+$("#runsel").onchange = async () => {
+  const v = $("#runsel").value;
+  $("#evaldetail").innerHTML = "";
+  if (!v) { viewingRun = null; pollEval(); return; }
+  const run = await (await fetch("/api/eval/runs/" + v)).json();
+  if (run.error) { $("#evalnote").textContent = run.error; return; }
+  viewingRun = run.run_id;
+  renderEval({running: false, results: run.results, provider: run.provider,
+              model: run.model, run_id: run.run_id,
+              started_utc: run.started_utc, viewing: true});
+};
+
+function idsFor(kind) {
+  if (kind === "all") return [];
+  if (kind === "sc") return DATA.scenarios.map(s => s.scenario_id);
+  if (kind === "ids")
+    return $("#evalids").value.trim().split(/[\s,]+/).filter(Boolean).map(s => s.toUpperCase());
+  const tier = Number(kind.slice(1));
+  return DATA.questions.filter(q => q.tier === tier).map(q => q.question_id);
+}
+
+async function startEval(kind) {
+  const ids = idsFor(kind);
+  if (kind === "ids" && !ids.length) return;
+  const resp = await fetch("/api/eval/start", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ids})});
+  const body = await resp.json();
+  if (body.error) { $("#evalnote").textContent = body.error; return; }
+  viewingRun = null;
+  $("#runsel").value = "";
+  $("#evalnote").textContent = "";
+  $("#evaltable tbody").innerHTML = "";
+  $("#evaldetail").innerHTML = "";
+  loadRuns();
+  pollEval(true);
+}
+
+async function pollEval(force) {
+  if (evalTimer) { clearTimeout(evalTimer); evalTimer = null; }
+  const st = await (await fetch("/api/eval/status")).json();
+  if (viewingRun === null) renderEval(st);
+  else document.querySelectorAll("[data-run]").forEach(b => b.disabled = st.running);
+  if (evalWasRunning && !st.running) loadRuns();  // a run just finished
+  evalWasRunning = st.running;
+  if (st.running) evalTimer = setTimeout(() => pollEval(), 2500);
+}
+
+function renderEval(st) {
+  document.querySelectorAll("[data-run]").forEach(b => b.disabled = st.running);
+  $("#runsel").disabled = st.running;
+  const prog = $("#evalprog");
+  const runTag = st.run_id ? `run #${st.run_id}` : "run";
+  const when = st.started_utc ?
+    ` — started ${st.started_utc.replace("T", " ").replace("Z", "")} UTC` : "";
+  if (st.running && st.total) {
+    prog.style.display = "";
+    prog.firstElementChild.style.width = (100 * st.results.length / st.total) + "%";
+    $("#evalnote").textContent = `running ${runTag}: ${st.results.length}/${st.total} — ${st.provider} · ${st.model}`;
+  } else {
+    prog.style.display = "none";
+    if (st.error) $("#evalnote").textContent = st.error;
+    else if (st.results.length)
+      $("#evalnote").textContent =
+        (st.viewing ? `viewing ${runTag}` : st.saved ? `last ${runTag}` : `finished ${runTag}`) +
+        ` — ${st.provider} · ${st.model}${when}`;
+  }
+  if (!st.results.length) { $("#evaltable").style.display = "none"; $("#evalsummary").innerHTML = ""; return; }
+
+  const counts = {PASS: 0, PARTIAL: 0, MANUAL: 0, ERROR: 0};
+  let atoms = 0, found = 0;
+  for (const r of st.results) {
+    counts[r.status] = (counts[r.status] || 0) + 1;
+    if (r.status === "PASS" || r.status === "PARTIAL") { atoms += r.atoms; found += r.found; }
+  }
+  const cov = atoms ? (100 * found / atoms).toFixed(1) + "%" : "—";
+  $("#evalsummary").innerHTML =
+    Object.entries(counts).filter(([, n]) => n)
+      .map(([k, n]) => `<div class="stat ${k}"><b>${n}</b>${k}</div>`).join("") +
+    `<div class="stat"><b>${cov}</b>atom coverage</div>`;
+
+  $("#evaltable").style.display = "";
+  $("#evaltable tbody").innerHTML = st.results.map((r, i) => `
+    <tr>
+      <td class="id">${esc(r.id)}</td>
+      <td><span class="st ${r.status}">${r.status}</span></td>
+      <td>${r.found}/${r.atoms}</td>
+      <td>${r.tool_calls}</td>
+      <td>${r.seconds}s</td>
+      <td class="miss">${esc((r.missing || []).slice(0, 6).join(", "))}${(r.missing||[]).length > 6 ? "…" : ""}</td>
+      <td><button class="btn" onclick="showEvalDetail(${i})">answer</button></td>
+    </tr>`).join("");
+  window._evalResults = st.results;
+}
+
+function showEvalDetail(i) {
+  const r = window._evalResults[i];
+  $("#evaldetail").innerHTML = `
+    <div class="card">
+      <div class="head"><span class="id">${esc(r.id)}</span>
+        <span class="st ${r.status}">${r.status}</span>
+        <span style="margin-left:auto"></span>
+        <button class="btn" onclick="testInChat('${esc(r.id)}')">Re-test in chat</button>
+      </div>
+      <div class="explain">${esc(r.prompt)}</div>
+      ${r.error ? `<pre>${esc(r.error)}</pre>` : `<div class="msg bot" style="max-width:none;margin-top:10px">${md(r.answer)}</div>`}
+      ${(r.missing||[]).length ? `<details open><summary>Missing atoms (${r.missing.length})</summary><pre>${esc(r.missing.join("\n"))}</pre></details>` : ""}
+    </div>`;
+  $("#evaldetail").scrollIntoView({behavior: "smooth"});
+}
+</script>
+</body>
+</html>

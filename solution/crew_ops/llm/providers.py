@@ -55,6 +55,9 @@ class Turn:
 class Provider:
     name = "?"
     model = "?"
+    # Rough serialized-history size (chars) the advisor keeps the conversation
+    # under so the request fits the model's context window (~3-4 chars/token).
+    context_char_budget = 600_000
 
     def complete(self, system: str, messages: list, tool_schemas: list) -> Turn:
         raise NotImplementedError
@@ -232,9 +235,12 @@ class SarvamProvider(Provider):
     """Sarvam AI chat completions (OpenAI-style wire format), stdlib-only."""
 
     name = "sarvam"
+    # 128k-token window minus output headroom; dense JSON runs ~2.5 chars
+    # per token, so stay well below 128k * 2.5.
+    context_char_budget = 220_000
 
     def __init__(self, api_key: str, model: str = SARVAM_DEFAULT_MODEL,
-                 max_tokens: int = 4096,
+                 max_tokens: int = 8192,
                  reasoning_effort: Optional[str] = None, timeout: int = 120):
         self.api_key = api_key
         self.model = model

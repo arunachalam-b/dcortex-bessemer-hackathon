@@ -85,7 +85,7 @@ def provider_from_env():
         return providers.SarvamProvider(
             api_key=key,
             model=os.environ.get("SARVAM_MODEL", providers.SARVAM_DEFAULT_MODEL),
-            max_tokens=max_tokens or 4096,
+            max_tokens=max_tokens or 8192,
             reasoning_effort=os.environ.get("SARVAM_REASONING_EFFORT") or None)
 
     raise ConfigError(f"unknown LLM_PROVIDER '{name}' (expected 'claude' or 'sarvam')")

@@ -18,6 +18,7 @@ import re
 import sys
 import time
 
+from crew_ops import db as DB
 from crew_ops import load_world
 from crew_ops.llm import Advisor, ProviderError, provider_from_env
 
@@ -127,6 +128,12 @@ def main():
 
     os.makedirs(OUT_DIR, exist_ok=True)
     provider = provider_from_env()
+    try:  # CLI runs land in the same SQLite history as web-UI runs
+        run_id = DB.create_run(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                               provider.name, provider.model, sorted(only),
+                               len(items))
+    except DB.DBError:
+        run_id = None
     results = []
     with open(os.path.join(OUT_DIR, "progress.log"), "w") as log:
         log.write(f"provider={provider.name} model={provider.model} "
@@ -134,7 +141,18 @@ def main():
         log.flush()
         for item_id, prompt, expected in items:
             results.append(run_item(world, item_id, prompt, expected, log))
+            if run_id is not None:
+                try:
+                    DB.add_result(run_id, len(results) - 1, results[-1])
+                except DB.DBError:
+                    pass
             time.sleep(1)
+    if run_id is not None:
+        try:
+            DB.finish_run(run_id, time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                time.gmtime()))
+        except DB.DBError:
+            pass
 
     with open(os.path.join(OUT_DIR, "results.json"), "w") as fh:
         json.dump({"provider": provider.name, "model": provider.model,

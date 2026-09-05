@@ -196,9 +196,24 @@ def find_data_dir(start: Optional[str] = None) -> str:
 def load_world(data_dir: Optional[str] = None) -> World:
     data_dir = data_dir or find_data_dir()
 
-    def load(name):
+    def load_file(name):
         with open(os.path.join(data_dir, name)) as fh:
             return json.load(fh)
+
+    # The dataset is frozen for the hackathon: it lives mirrored in SQLite
+    # (seeded once from the JSON files) and is read from there; any DB
+    # problem falls back to reading the original files.
+    try:
+        from . import db
+        db.ensure_seeded(data_dir)
+
+        def load(name):
+            try:
+                return db.load_json(name)
+            except db.DBError:
+                return load_file(name)
+    except Exception:
+        load = load_file
 
     w = World(data_dir=data_dir, snapshot=parse_utc("2026-09-14T18:00:00Z"))
 

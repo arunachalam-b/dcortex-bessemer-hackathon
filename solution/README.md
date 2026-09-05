@@ -11,7 +11,7 @@ switch, not a code change.
   all 16 Tier-1, all 14 Tier-2 minus 1 open-ended, all 8 Tier-3 minus 2
   open-ended questions, and all 6 scenarios (S1–S6). The 3 open-ended prose
   questions (Q30/Q36/Q38) are flagged for human judging, never auto-passed.
-- **121 pytest tests** green (`python3 -m pytest tests/`), runtime < 1 s —
+- **124 pytest tests** green (`python3 -m pytest tests/`), runtime < 1 s —
   including the AI layer (config, both wire formats, advisor loop,
   groundedness gate), all offline via a fake provider.
 - Engine + Sarvam path: Python 3.9+ stdlib only. Claude path additionally

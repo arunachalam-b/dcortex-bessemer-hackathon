@@ -49,7 +49,11 @@ def sick_crew_impact(world: World, crew_id: str, pairing_id: Optional[str] = Non
     remaining day is at risk, not just the first)."""
     from_date = reported_utc.date() if reported_utc else None
     p = _pairing_for_crew(world, crew_id, pairing_id, from_date)
-    role = next(r for m, r in p.crew if m == crew_id)
+    roles = {m: r for m, r in p.crew}
+    if crew_id not in roles:
+        raise ValueError(f"{crew_id} is not rostered on pairing {p.pairing_id} "
+                         f"(its crew: {', '.join(roles)})")
+    role = roles[crew_id]
     days = [d for d in p.days if from_date is None or d.date >= from_date]
     per_day = [{"date": str(d.date), "flights": list(d.flights),
                 "passengers": sum(world.flights[f].seats for f in d.flights)}
@@ -194,7 +198,25 @@ def check_assignment(world: World, crew_id: str, pairing_id: str,
         exclude_pairing = pairing_id
     check = R.evaluate_cover(world, crew_id, pdays,
                              exclude_pairing=exclude_pairing, delay_h=delay_hours)
-    return check.to_dict()
+    result = check.to_dict()
+    # An out-of-base cover is legal only via deadhead positioning (RULE-BASE-07);
+    # surface that operational consequence with the verdict.
+    c = world.crew[crew_id]
+    first = world.flights[pdays[0].flights[0]]
+    if c.base != first.dep_station:
+        from .recommender import _deadhead_positioning
+        dh, note = _deadhead_positioning(world, c.base, pdays)
+        if dh is None:
+            result["positioning"] = {"required": True, "possible": False,
+                                     "detail": note}
+        else:
+            result["positioning"] = {
+                "required": True, "detail": note,
+                "first_departure_delay_hours": dh,
+                "note": f"RULE-BASE-07: {crew_id} is {c.base}-based; deadhead "
+                        f"positioning to {first.dep_station} is required and "
+                        f"its cost applies"}
+    return result
 
 
 def rest_requirement(world: World, release_utc: datetime) -> dict:

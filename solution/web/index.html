@@ -531,8 +531,16 @@ function handleChatEvent(ev, toolrow) {
         ' <span class="note">— didn’t work, adjusting…</span>');
     }
   } else if (ev.type === "retry") {
+    const note = ev.reason === "ungrounded ids"
+      ? "double-checking unverified ids…" : "re-phrasing a tool call…";
     toolrow.insertAdjacentHTML("beforeend",
-      `<span class="toolchip"><span class="note">re-phrasing a tool call…</span></span>`);
+      `<span class="toolchip"><span class="note">${note}</span></span>`);
+  } else if (ev.type === "continue") {
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip"><span class="note">long answer — continuing…</span></span>`);
+  } else if (ev.type === "compact") {
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip"><span class="note">trimming older tool results to fit…</span></span>`);
   } else if (ev.type === "error") {
     chatAppend(`<div class="msg err">${esc(ev.error)}</div>`);
   } else if (ev.type === "answer") {

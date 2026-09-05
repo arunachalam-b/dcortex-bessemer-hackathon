@@ -90,11 +90,14 @@
   .msg.bot p { margin: 0 0 8px; } .msg.bot p:last-child { margin-bottom: 0; }
   .msg.err { background: #2d1f1e; border: 1px solid #5c2f2c; color: #f0b9b5; }
   .toolchip {
-    display: inline-block; font-size: 12px; font-family: ui-monospace, monospace;
-    background: #1a2634; border: 1px solid #27405c; color: #79c0ff;
+    display: inline-block; font-size: 12px;
+    background: #1a2634; border: 1px solid #27405c; color: #9ecbff;
     border-radius: 999px; padding: 2px 10px; margin: 2px 4px 2px 0;
   }
-  .toolchip.bad { border-color: #5c2f2c; color: #e5534b; }
+  .toolchip b { color: #79c0ff; font-weight: 600; font-family: ui-monospace, monospace; }
+  .toolchip.bad { border-color: #5c2f2c; color: #f0b9b5; }
+  .toolchip.bad b { color: #e5534b; }
+  .toolchip .note { color: var(--muted); font-style: italic; }
   .toolrow { margin-bottom: 10px; max-width: 85%; }
   .typing { color: var(--muted); font-style: italic; margin-bottom: 12px; }
   #chatform { display: flex; gap: 8px; }
@@ -103,6 +106,10 @@
     border-radius: 10px; padding: 10px 14px; font: inherit; resize: vertical; min-height: 44px;
   }
   #chatinput:focus { outline: none; border-color: var(--accent); }
+  #micbtn { min-width: 52px; }
+  #micbtn.rec { border-color: var(--error); color: var(--error);
+                animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
 
   /* eval */
   .evalbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
@@ -126,6 +133,18 @@
   .st.PARTIAL { background: #3a2e12; color: #e3b341; }
   .st.ERROR { background: #3d1a17; color: #ff7b72; }
   .st.MANUAL { background: #2c1e42; color: #d2a8ff; }
+  .st.INFO { background: #21262d; color: var(--muted); }
+  #tab-eval { position: relative; }
+  #legendbtn { margin-left: auto; border-radius: 999px; width: 30px; height: 30px;
+               padding: 0; font-size: 15px; color: var(--muted); }
+  #legendbtn:hover, #legendbtn.open { color: var(--accent); border-color: var(--accent); }
+  .legend { display: none; position: absolute; right: 0; top: 44px; z-index: 30;
+            max-width: 560px; box-shadow: 0 10px 30px rgba(0,0,0,.55); }
+  .legend.open { display: block; }
+  .legend div { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
+  .legend .st { margin-right: 4px; }
+  #runsel { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+            border-radius: 8px; padding: 7px 10px; font: inherit; max-width: 480px; }
   .miss { color: var(--partial); font-family: ui-monospace, monospace; font-size: 12px; }
   td .btn { padding: 2px 10px; font-size: 12px; }
   .muted { color: var(--muted); }
@@ -159,6 +178,7 @@
     </div>
     <form id="chatform">
       <textarea id="chatinput" rows="2" placeholder="Message the advisor… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button class="btn" id="micbtn" type="button" title="Speak your question — transcribed with Sarvam speech-to-text">&#127908;</button>
       <button class="btn primary" id="sendbtn" type="submit">Send</button>
     </form>
   </section>
@@ -187,6 +207,19 @@
       <input id="evalids" placeholder="or ids: Q01 Q05 S2">
       <button class="btn" data-run="ids">Run ids</button>
       <span class="muted" id="evalnote"></span>
+      <button class="btn" id="legendbtn" title="How to read these results">&#9432;</button>
+    </div>
+    <div class="card legend" id="evallegend">
+      <b style="font-size:12px;color:var(--muted);letter-spacing:.4px">HOW TO READ THESE RESULTS</b>
+      <div><span class="st PASS">PASS</span> every key fact ("atom") from the answer key — crew/pairing/flight/rule ids and numbers — appears in the advisor's answer.</div>
+      <div><span class="st PARTIAL">PARTIAL</span> an answer was produced but some expected atoms weren't recited (e.g. it named the best option without listing every ranked cost). Usually correct-but-terse under strict grading, worth a skim.</div>
+      <div><span class="st MANUAL">MANUAL</span> free-form judgement item (Q30, Q36, Q38) with no mechanical answer key — a human reads and grades it.</div>
+      <div><span class="st ERROR">ERROR</span> the AI provider failed for this item; no answer was produced.</div>
+      <div><span class="st INFO">Atoms</span> key facts found / expected for the item; <b>atom coverage</b> is the overall % found across auto-graded items.</div>
+    </div>
+    <div class="evalbar">
+      <span class="muted">Run history:</span>
+      <select id="runsel"><option value="">Latest result</option></select>
     </div>
     <div class="progress" id="evalprog" style="display:none"><div></div></div>
     <div class="summary" id="evalsummary"></div>
@@ -227,7 +260,7 @@ function showTab(name) {
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach(t =>
     t.classList.toggle("active", t.id === "tab-" + name));
-  if (name === "eval") pollEval();
+  if (name === "eval") { loadRuns(); pollEval(); }
 }
 
 /* ---------- boot ---------- */
@@ -248,6 +281,7 @@ async function boot() {
   DATA = await (await fetch("/api/dataset")).json();
   renderQuestions("all");
   renderScenarios();
+  loadRuns();
   pollEval();
 }
 boot();
@@ -374,14 +408,131 @@ async function sendMessage(text) {
   }
 }
 
+/* ---------- voice input (recorded here, transcribed by Sarvam STT) ---------- */
+let rec = null, recChunks = [], recStream = null, recTimer = null, recT0 = 0;
+
+$("#micbtn").onclick = async () => {
+  const btn = $("#micbtn");
+  if (rec) { rec.stop(); return; }               // second click = stop
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch {
+    chatAppend(`<div class="msg err">Microphone unavailable — allow mic access to use voice input.</div>`);
+    return;
+  }
+  recChunks = [];
+  rec = new MediaRecorder(recStream);
+  rec.ondataavailable = e => recChunks.push(e.data);
+  rec.onstop = onRecStop;
+  rec.start();
+  recT0 = Date.now();
+  btn.classList.add("rec");
+  btn.textContent = "⏹ 0:00";
+  recTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - recT0) / 1000);
+    btn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }, 250);
+};
+
+async function onRecStop() {
+  const btn = $("#micbtn");
+  clearInterval(recTimer);
+  btn.classList.remove("rec");
+  btn.textContent = "…";
+  btn.disabled = true;
+  recStream.getTracks().forEach(t => t.stop());
+  const blob = new Blob(recChunks, {type: rec.mimeType || "audio/webm"});
+  rec = null;
+  try {
+    if (blob.size < 1000) throw new Error("recording too short — hold the mic a moment longer");
+    const resp = await fetch("/api/transcribe", {method: "POST",
+      headers: {"Content-Type": "audio/wav"}, body: await toWav16k(blob)});
+    const out = await resp.json();
+    if (out.error) throw new Error(out.error);
+    if (!out.transcript) throw new Error("didn’t catch that — try again closer to the mic");
+    const input = $("#chatinput");
+    input.value = (input.value.trim() ? input.value.trim() + " " : "") + out.transcript;
+    input.focus();
+  } catch (e) {
+    chatAppend(`<div class="msg err">voice input: ${esc(e.message)}</div>`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🎤";
+  }
+}
+
+// decode whatever the browser recorded and re-encode as 16 kHz mono PCM WAV
+async function toWav16k(blob) {
+  const ac = new AudioContext();
+  const decoded = await ac.decodeAudioData(await blob.arrayBuffer());
+  ac.close();
+  const rate = 16000;
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+  const src = off.createBufferSource();
+  src.buffer = decoded; src.connect(off.destination); src.start();
+  const mono = (await off.startRendering()).getChannelData(0);
+  const view = new DataView(new ArrayBuffer(44 + mono.length * 2));
+  const str = (o, s) => [...s].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); view.setUint32(4, 36 + mono.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  str(36, "data"); view.setUint32(40, mono.length * 2, true);
+  for (let i = 0; i < mono.length; i++)
+    view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, mono[i])) * 0x7fff, true);
+  return new Blob([view], {type: "audio/wav"});
+}
+
+// plain-language description of what the advisor is doing with each tool call
+function phraseFor(name, a) {
+  a = a || {};
+  const p = {
+    lookup_crew: () => "Looking up crew " + (a.crew_id || a.name ||
+      ("matching " + (Object.entries(a).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`).join(", ") || "all"))),
+    lookup_flights: () => "Checking the flight schedule" +
+      (a.flight_no ? ` for ${a.flight_no}` : "") + (a.dep_station ? ` from ${a.dep_station}` : "") +
+      (a.arr_station ? ` to ${a.arr_station}` : "") + (a.date ? ` on ${a.date}` : ""),
+    get_duty_clock: () => `Reading ${a.crew_id}'s 7-day duty / 28-day flight-hour clocks`,
+    get_reserves: () => "Listing reserve crew" + (a.base ? ` at ${a.base}` : "") + (a.date ? ` for ${a.date}` : ""),
+    get_certifications: () => "Checking certifications" + (a.crew_id ? ` for ${a.crew_id}` : ""),
+    get_risk_signals: () => "Reading disruption-risk scores" + (a.crew_id ? ` for ${a.crew_id}` : ""),
+    get_pairing: () => "Fetching pairing details" +
+      (a.pairing_id ? ` for ${a.pairing_id}` : a.crew_id ? ` for ${a.crew_id}` : a.aircraft ? ` for ${a.aircraft}` : ""),
+    get_duty_watchlist: () => "Scanning for crew near the 7-day duty limit",
+    simulate_sick_crew: () => `Simulating ${a.crew_id} dropping out` + (a.pairing_id ? ` of ${a.pairing_id}` : ""),
+    simulate_station_closure: () => `Simulating the ${a.station} closure impact, flight by flight`,
+    simulate_delay: () => `Simulating a ${a.delay_hours}h delay for ${a.aircraft}: does the crew's FDP still hold?`,
+    check_certification_validity: () => `Verifying ${a.crew_id} is certified to operate on ${a.date}`,
+    check_assignment_legality: () => `Running the full 7-rule legality check: ${a.crew_id} on ${a.pairing_id}`,
+    compute_rest_requirement: () => "Computing the earliest legal next report after release",
+    cancellation_impact: () => `Costing a cancellation of ${a.flight_id} (passengers + direct cost)`,
+    recommend_cover: () => `Ranking legal, costed cover options for ${a.role || "the open seat"} on ${a.pairing_id}`,
+    recommend_joint: () => `Optimising one joint plan across ${(a.events || []).length || "several"} simultaneous disruptions`,
+    recommend_delay_recovery: () => `Working out a delay-recovery plan for ${a.aircraft} (split / re-crew / cancel)`,
+    draft_notification: () => `Drafting the callout message for ${a.crew_id}`,
+  }[name];
+  return p ? p() : name.replace(/_/g, " ");
+}
+
 function handleChatEvent(ev, toolrow) {
   if (ev.type === "tool_call") {
     toolrow.insertAdjacentHTML("beforeend",
-      `<span class="toolchip" title="${esc(JSON.stringify(ev.args))}">→ ${esc(ev.name)}</span>`);
+      `<span class="toolchip" title="${esc(ev.name)}(${esc(JSON.stringify(ev.args))})">` +
+      `<b>→</b> ${esc(phraseFor(ev.name, ev.args))}</span>`);
     $("#chatlog").scrollTop = $("#chatlog").scrollHeight;
   } else if (ev.type === "tool_result" && !ev.ok) {
     const chips = toolrow.querySelectorAll(".toolchip");
-    if (chips.length) chips[chips.length - 1].classList.add("bad");
+    if (chips.length) {
+      const chip = chips[chips.length - 1];
+      chip.classList.add("bad");
+      chip.title = (ev.error || "tool call failed") + " — the advisor sees this and adjusts";
+      chip.insertAdjacentHTML("beforeend",
+        ' <span class="note">— didn’t work, adjusting…</span>');
+    }
+  } else if (ev.type === "retry") {
+    toolrow.insertAdjacentHTML("beforeend",
+      `<span class="toolchip"><span class="note">re-phrasing a tool call…</span></span>`);
   } else if (ev.type === "error") {
     chatAppend(`<div class="msg err">${esc(ev.error)}</div>`);
   } else if (ev.type === "answer") {
@@ -396,9 +547,54 @@ function handleChatEvent(ev, toolrow) {
 }
 
 /* ---------- eval ---------- */
+$("#legendbtn").onclick = e => {
+  e.stopPropagation();
+  const open = $("#evallegend").classList.toggle("open");
+  $("#legendbtn").classList.toggle("open", open);
+};
+document.addEventListener("click", e => {
+  if (!e.target.closest("#evallegend")) {
+    $("#evallegend").classList.remove("open");
+    $("#legendbtn").classList.remove("open");
+  }
+});
+
 let evalTimer = null;
+let viewingRun = null;      // run_id being inspected, or null = live/latest
+let evalWasRunning = false;
 
 document.querySelectorAll("[data-run]").forEach(b => b.onclick = () => startEval(b.dataset.run));
+
+async function loadRuns() {
+  try {
+    const body = await (await fetch("/api/eval/runs")).json();
+    const sel = $("#runsel");
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Latest result</option>' +
+      (body.runs || []).map(r => {
+        const when = (r.started_utc || "").replace("T", " ").replace("Z", "");
+        const c = r.counts || {};
+        const parts = ["PASS", "PARTIAL", "MANUAL", "ERROR"]
+          .filter(k => c[k]).map(k => `${c[k]} ${k.toLowerCase()}`).join(", ");
+        const state = r.finished_utc ? "" : " — in progress";
+        return `<option value="${r.run_id}">Run #${r.run_id} · ${when} UTC · ` +
+               `${esc(r.model || r.provider || "?")} · ${parts || `${r.done}/${r.total}`}${state}</option>`;
+      }).join("");
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  } catch (e) { /* no history available — latest-result view still works */ }
+}
+
+$("#runsel").onchange = async () => {
+  const v = $("#runsel").value;
+  $("#evaldetail").innerHTML = "";
+  if (!v) { viewingRun = null; pollEval(); return; }
+  const run = await (await fetch("/api/eval/runs/" + v)).json();
+  if (run.error) { $("#evalnote").textContent = run.error; return; }
+  viewingRun = run.run_id;
+  renderEval({running: false, results: run.results, provider: run.provider,
+              model: run.model, run_id: run.run_id,
+              started_utc: run.started_utc, viewing: true});
+};
 
 function idsFor(kind) {
   if (kind === "all") return [];
@@ -417,32 +613,43 @@ async function startEval(kind) {
     body: JSON.stringify({ids})});
   const body = await resp.json();
   if (body.error) { $("#evalnote").textContent = body.error; return; }
+  viewingRun = null;
+  $("#runsel").value = "";
   $("#evalnote").textContent = "";
   $("#evaltable tbody").innerHTML = "";
   $("#evaldetail").innerHTML = "";
+  loadRuns();
   pollEval(true);
 }
 
 async function pollEval(force) {
   if (evalTimer) { clearTimeout(evalTimer); evalTimer = null; }
   const st = await (await fetch("/api/eval/status")).json();
-  renderEval(st);
+  if (viewingRun === null) renderEval(st);
+  else document.querySelectorAll("[data-run]").forEach(b => b.disabled = st.running);
+  if (evalWasRunning && !st.running) loadRuns();  // a run just finished
+  evalWasRunning = st.running;
   if (st.running) evalTimer = setTimeout(() => pollEval(), 2500);
 }
 
 function renderEval(st) {
   document.querySelectorAll("[data-run]").forEach(b => b.disabled = st.running);
+  $("#runsel").disabled = st.running;
   const prog = $("#evalprog");
+  const runTag = st.run_id ? `run #${st.run_id}` : "run";
+  const when = st.started_utc ?
+    ` — started ${st.started_utc.replace("T", " ").replace("Z", "")} UTC` : "";
   if (st.running && st.total) {
     prog.style.display = "";
     prog.firstElementChild.style.width = (100 * st.results.length / st.total) + "%";
-    $("#evalnote").textContent = `running ${st.results.length}/${st.total} — ${st.provider} · ${st.model}`;
+    $("#evalnote").textContent = `running ${runTag}: ${st.results.length}/${st.total} — ${st.provider} · ${st.model}`;
   } else {
     prog.style.display = "none";
     if (st.error) $("#evalnote").textContent = st.error;
     else if (st.results.length)
       $("#evalnote").textContent =
-        (st.saved ? "last saved run — " : "finished — ") + `${st.provider} · ${st.model}`;
+        (st.viewing ? `viewing ${runTag}` : st.saved ? `last ${runTag}` : `finished ${runTag}`) +
+        ` — ${st.provider} · ${st.model}${when}`;
   }
   if (!st.results.length) { $("#evaltable").style.display = "none"; $("#evalsummary").innerHTML = ""; return; }
 

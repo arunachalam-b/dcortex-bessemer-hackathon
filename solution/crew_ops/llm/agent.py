@@ -96,7 +96,8 @@ class Advisor:
                 self.on_event("tool_call", {"name": c.name, "args": c.args})
                 resp = T.dispatch(self.world, c.name, c.args)
                 self.on_event("tool_result",
-                              {"name": c.name, "ok": resp.get("ok", False)})
+                              {"name": c.name, "ok": resp.get("ok", False),
+                               "error": resp.get("error")})
                 results.append({"id": c.id, "name": c.name, "content": resp})
                 self._evidence.append(json.dumps(resp, default=str))
             self.history.append({"role": "tool_results", "results": results})

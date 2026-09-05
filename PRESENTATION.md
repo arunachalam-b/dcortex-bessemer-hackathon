@@ -103,6 +103,55 @@ sequenceDiagram
     T-->>Ctrl: ranked options + legality badges + costs + "Show reasoning" trace
 ```
 
+### The 19 tools — the complete boundary
+
+Every tool is registered in `crew_ops/tools.py` with a JSON-schema signature,
+a description the LLM plans against, and a fixed list of the dataset files it
+reads (returned as `sources` with every response). The contract is uniform:
+
+```
+dispatch(world, name, args) → {"ok": true, "result": …, "sources": [...], "trace": [...]}
+                            | {"ok": false, "error": "…", "hint": "…"}   ← honest-refusal path
+```
+
+Bad ids/dates never raise — they come back as `ok: false` with a hint, which
+the LLM is instructed to relay, not improvise around. An unknown tool name
+returns the list of available tools.
+
+**Tier 1 — Query (8 tools)** — required arguments marked `*`
+
+| Tool | What it does | Key inputs | Reads |
+|---|---|---|---|
+| `lookup_crew` | Find crew by id / name / rank / base / status / rating | any filter combination | crew.json |
+| `lookup_flights` | Filter the flight schedule | date, dep/arr station, flight_no, aircraft | flights.json |
+| `get_duty_clock` | Rolling 7-day duty / 28-day flight-hour windows ending a given date (daily history **plus rostered duties**), with headroom vs. the limits | crew_id\*, end_date | duty_clocks, rosters, rules |
+| `get_reserves` | Reserve pool with on-call windows | base, date | reserve_pool, crew |
+| `get_certifications` | Certifications for one crew member, or all expiring in a window | crew_id, expiring_from/to | certifications |
+| `get_risk_signals` | Pre-computed disruption-risk scores (provided input) | crew_id, min_score | risk_signals |
+| `get_pairing` | Pairings with days, flights, report/release times and assigned crew | pairing_id, crew_id, aircraft, date | rosters |
+| `get_duty_watchlist` | Crew at/above a 7-day duty-hour threshold — the proactive early-warning list | end_date\*, threshold (default 45 h) | duty_clocks, rosters |
+
+**Tier 2 — Simulation & legality (7 tools)**
+
+| Tool | What it does | Key inputs | Reads |
+|---|---|---|---|
+| `simulate_sick_crew` | Impact of a crew member dropping out: uncovered flights across all remaining pairing days, passengers affected, the broken pairing | crew_id\*, pairing_id, reported_utc | rosters, flights |
+| `simulate_station_closure` | Flights hit by a closure window, plus a per-flight minimum-delay and FDP assessment | station\*, window_start_utc\*, window_end_utc\* | flights, rosters, rules |
+| `simulate_delay` | A pre-duty delay shifts every leg: does the rostered crew's FDP still hold, and how many legs can they legally fly? | aircraft\*, date\*, delay_hours\* | flights, rosters, rules |
+| `check_certification_validity` | Is this crew member legal to operate on this date? (RULE-CERT-06) | crew_id\*, date\* | certifications, rosters |
+| `check_assignment_legality` | The full 7-rule check: can this crew cover this pairing (optionally from a date, with a delay)? Verdicts, issues **and the arithmetic trace** | crew_id\*, pairing_id\*, days_from, delay_hours | rosters, duty_clocks, certifications, rules |
+| `compute_rest_requirement` | Earliest legal next report after a release time (RULE-REST-04) | release_utc\* | rules |
+| `cancellation_impact` | Passengers affected and the direct cost of cancelling one leg | flight_id\* | flights, costs |
+
+**Tier 3 — Recommendation & action (4 tools)**
+
+| Tool | What it does | Key inputs | Reads |
+|---|---|---|---|
+| `recommend_cover` | Ranked, rule-checked, costed options to cover a role on a pairing — **including every rejected candidate and the exact rule that killed them** | pairing_id\*, role\*, sick_crew_id, days_from | crew, rosters, reserve_pool, duty_clocks, certifications, rules, costs |
+| `recommend_joint` | Joint plan for simultaneous disruptions: no crew member used twice, total cost minimised | events\[\]\* (pairing, role, sick crew per event) | crew, rosters, reserve_pool, costs, rules |
+| `recommend_delay_recovery` | Recovery when a delay breaches FDP: split the duty at the longest legal prefix, re-crew or cancel the tail, ranked by cost | aircraft\*, date\*, delay_hours\* | rosters, rules, costs |
+| `draft_notification` | Structured callout facts + ready-to-send plain-text message for a chosen cover (the bonus deliverable) | crew_id\*, pairing_id\*, days_from | rosters, crew, flights |
+
 ---
 
 ## 3. Requirements coverage — what was asked vs. what the repo has
@@ -290,6 +339,97 @@ errors; live re-runs vary with the provider's API.)*
    context + the deadhead cost story.
 4. An out-of-scope question → honest refusal, live.
 5. **Eval** tab: show the scoreboard the judges just read, being re-computed.
+
+---
+
+---
+
+## 9. Technical appendix — implementation details
+
+### The advisor loop (`crew_ops/llm/agent.py`)
+
+- The operational snapshot "now" is pinned to `2026-09-14T18:00:00Z` in the
+  system prompt, so relative dates ("tomorrow") resolve deterministically.
+- **Budget:** at most 16 model round-trips per question; if the model hasn't
+  converged, the system says so honestly instead of answering anyway.
+- **Leak recovery:** some models write tool-call markup as plain text instead
+  of invoking tools. The loop detects this, tells the model those calls were
+  *not* executed, and pushes it back to the real tool interface — the user
+  never sees the leak.
+- **Groundedness gate mechanics:** every tool result JSON (plus the
+  controller's own question — ids they typed are fair to echo) accumulates in
+  an evidence pool that persists across conversation turns. On finalize, four
+  regex families (`C-xxxx` crew, `P-xxxx` pairings, `DXnnn` flights,
+  `VT-XXX` tails) scan the answer; any id absent from the evidence is appended
+  to the answer as explicitly **unverified**.
+
+### The provider layer (`crew_ops/llm/providers.py`)
+
+- One neutral conversation format (`user` / `assistant` / `tool_results`
+  entries); each provider translates to and from its own wire format and
+  returns a normalized `Turn`. Defaults: `claude-opus-5` (official
+  `anthropic` SDK) and `sarvam-105b` (OpenAI-style API via **stdlib
+  `urllib` only** — no SDK dependency).
+- Each assistant turn keeps the provider's `raw` content so the same provider
+  can replay it verbatim (Claude must re-send thinking/tool_use blocks
+  unchanged); a turn from a *different* provider is reconstructed from the
+  neutral fields — **a conversation survives a mid-session provider swap**.
+- Transient failures (HTTP 429 / 5xx, timeouts) retry with exponential
+  backoff; an answer cut off by `max_tokens` is flagged in the text rather
+  than silently truncated.
+
+### Voice input (`crew_ops/llm/stt.py`)
+
+The web UI has a mic button: the browser records audio, downsamples to
+16 kHz mono WAV, and POSTs it to `/api/transcribe`; Sarvam's **Saarika
+v2.5** speech-to-text returns the transcript with auto-detected language.
+Stdlib-only multipart upload with the same retry policy; independent of
+which LLM provider is answering questions.
+
+### Persistence (`crew_ops/db.py`, SQLite)
+
+- The frozen dataset is seeded **once** into `crew_ops.db` (verbatim JSON per
+  record); later loads read from SQLite, and any DB error falls back
+  transparently to the original JSON files — the dataset remains the single
+  source of truth. Seeding refuses to serve a mirror built from a different
+  data directory.
+- **Eval-run history:** every eval run (`eval_runs` + per-item
+  `eval_results`, including full prompts, answers, timings and tool-call
+  counts) is appended, so the whole history survives server restarts and is
+  browsable via `/api/eval/runs` — not just the last run.
+
+### The web server (`solution/server.py`)
+
+Pure-stdlib `ThreadingHTTPServer` — no framework. Chat streams **NDJSON
+events** (`tool_call`, `tool_result`, answer) so the UI renders tool chips
+live while the model works. Sessions are per-`session_id` advisors with their
+own multi-turn history and locks.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/meta` | provider info, tool schemas, dataset counts |
+| `GET /api/dataset` | questions + scenarios (with eval prompts) |
+| `POST /api/chat` | `{session_id, message}` → NDJSON event stream |
+| `POST /api/chat/reset` | fresh advisor context |
+| `POST /api/transcribe` | raw audio → `{transcript}` (Sarvam STT) |
+| `POST /api/eval/start` | run the eval (all items or a subset) |
+| `GET /api/eval/status` | live progress + graded results |
+| `GET /api/eval/runs`, `/runs/N` | eval-run history from SQLite |
+
+### The eval grader (`run_llm_eval.py`)
+
+Answer keys are reduced to **fact atoms**: dataset ids (`C-…`, `P-…`,
+`DX…`, `VT-…`, `RULE-…`) and non-zero numeric values; timestamps grade on
+their date and hh:mm parts. Boilerplate keys (`rules_checked`,
+`explanation`, `rank`, …) are excluded from grading. Every atom must
+literally appear in the prose answer (commas stripped) — which is why
+PARTIAL means "correct but not exhaustive", never "wrong".
+
+### Dependency footprint
+
+The only third-party dependency in the whole system is the `anthropic` SDK,
+and only for the Claude path. Engine, Sarvam provider, STT, SQLite layer,
+web server and evaluators are Python stdlib end to end.
 
 ---
 

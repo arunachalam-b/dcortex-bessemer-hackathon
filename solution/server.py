@@ -10,8 +10,15 @@ and provider-switchable AI layer the CLI uses:
   GET  /api/dataset       questions.json + scenarios.json (with eval prompts)
   POST /api/chat          {"session_id", "message"} -> NDJSON event stream
   POST /api/chat/reset    {"session_id"} -> fresh advisor context
+  POST /api/transcribe    raw audio/wav body -> {"transcript"} (Sarvam STT)
   POST /api/eval/start    {"ids": [...]} (empty/absent = all items)
   GET  /api/eval/status   live progress + graded results
+  GET  /api/eval/runs     history of all eval runs (SQLite)
+  GET  /api/eval/runs/N   one past run with full graded results
+
+Persistence: the frozen dataset and every eval run live in SQLite
+(solution/crew_ops.db via crew_ops.db); reads fall back to the JSON
+files / llm_eval_out/results.json if the DB is unavailable.
 """
 
 import json
@@ -24,8 +31,10 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from crew_ops import load_world
+from crew_ops import db as DB
 from crew_ops import tools as T
 from crew_ops.llm import Advisor, ConfigError, ProviderError, provider_from_env
+from crew_ops.llm import stt
 from run_llm_eval import MANUAL, OUT_DIR, SCENARIO_INSTRUCTION, grade
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,7 +46,7 @@ _sessions = {}          # session_id -> {"advisor": Advisor, "lock": Lock}
 _sessions_lock = threading.Lock()
 
 _eval = {"running": False, "total": 0, "results": [], "provider": None,
-         "model": None, "error": None, "started_utc": None}
+         "model": None, "error": None, "started_utc": None, "run_id": None}
 _eval_lock = threading.Lock()
 
 
@@ -50,10 +59,14 @@ def _provider_meta():
 
 
 def _load_dataset():
-    with open(os.path.join(WORLD.data_dir, "questions.json")) as fh:
-        questions = json.load(fh)
-    with open(os.path.join(WORLD.data_dir, "scenarios.json")) as fh:
-        scenarios = json.load(fh)
+    def read(name):  # SQLite first, the JSON file as fallback
+        try:
+            return DB.load_json(name)
+        except Exception:
+            with open(os.path.join(WORLD.data_dir, name)) as fh:
+                return json.load(fh)
+    questions = read("questions.json")
+    scenarios = read("scenarios.json")
     for s in scenarios:
         s["prompt"] = s["event"]["narrative"] + SCENARIO_INSTRUCTION
     return questions, scenarios
@@ -79,12 +92,18 @@ def _run_eval(ids):
         with _eval_lock:
             _eval.update(running=False, error=str(e))
         return
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:  # every run is appended to SQLite history
+        run_id = DB.create_run(started, provider.name, provider.model,
+                               ids, len(items))
+    except DB.DBError as e:
+        run_id = None
+        print(f"[eval history unavailable: {e}]", file=sys.stderr)
     with _eval_lock:
         _eval.update(total=len(items), results=[], error=None,
                      provider=provider.name, model=provider.model,
-                     started_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                               time.gmtime()))
-    for item_id, prompt, expected in items:
+                     started_utc=started, run_id=run_id)
+    for seq, (item_id, prompt, expected) in enumerate(items):
         advisor = Advisor(WORLD, provider_from_env())  # fresh context per item
         t0 = time.time()
         try:
@@ -112,7 +131,18 @@ def _run_eval(ids):
                "prompt": prompt, "answer": answer, "error": error}
         with _eval_lock:
             _eval["results"].append(rec)
+        if run_id is not None:
+            try:
+                DB.add_result(run_id, seq, rec)
+            except DB.DBError:
+                pass  # keep the run alive; results.json still written below
         time.sleep(1)
+    if run_id is not None:
+        try:
+            DB.finish_run(run_id, time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                time.gmtime()))
+        except DB.DBError:
+            pass
     with _eval_lock:
         _eval["running"] = False
         os.makedirs(OUT_DIR, exist_ok=True)
@@ -182,21 +212,48 @@ class Handler(BaseHTTPRequestHandler):
             with _eval_lock:
                 state = dict(_eval)
             if not state["running"] and not state["results"]:
-                saved = _load_saved_eval()
-                if saved:
-                    state.update(results=saved.get("results", []),
-                                 provider=saved.get("provider"),
-                                 model=saved.get("model"),
-                                 total=len(saved.get("results", [])),
-                                 saved=True)
+                # latest run from SQLite history, else the saved JSON file
+                try:
+                    run = DB.latest_run()
+                except DB.DBError:
+                    run = None
+                if run:
+                    state.update(results=run["results"],
+                                 provider=run["provider"],
+                                 model=run["model"], total=run["total"],
+                                 run_id=run["run_id"],
+                                 started_utc=run["started_utc"], saved=True)
+                else:
+                    saved = _load_saved_eval()
+                    if saved:
+                        state.update(results=saved.get("results", []),
+                                     provider=saved.get("provider"),
+                                     model=saved.get("model"),
+                                     total=len(saved.get("results", [])),
+                                     saved=True)
             return self._send_json(state)
+        if path == "/api/eval/runs":
+            try:
+                return self._send_json({"runs": DB.list_runs()})
+            except DB.DBError as e:
+                return self._send_json({"runs": [], "error": str(e)})
+        if path.startswith("/api/eval/runs/"):
+            try:
+                run = DB.get_run(int(path.rsplit("/", 1)[1]))
+            except (ValueError, DB.DBError):
+                run = None
+            if run is None:
+                return self._send_json({"error": "run not found"}, 404)
+            return self._send_json(run)
         self.send_error(404)
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path == "/api/transcribe":  # raw audio body, not JSON
+            return self._transcribe()
         try:
             body = self._read_json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return self._send_json({"error": "bad JSON body"}, 400)
         if path == "/api/chat":
             return self._chat(body)
@@ -209,7 +266,8 @@ class Handler(BaseHTTPRequestHandler):
                 if _eval["running"]:
                     return self._send_json(
                         {"error": "an eval run is already in progress"}, 409)
-                _eval.update(running=True, results=[], total=0, error=None)
+                _eval.update(running=True, results=[], total=0, error=None,
+                             run_id=None)
             ids = body.get("ids") or []
             threading.Thread(target=_run_eval, args=(ids,),
                              daemon=True).start()
@@ -229,6 +287,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _transcribe(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if not length or length > 15 * 1024 * 1024:
+            return self._send_json({"error": "empty or oversized audio clip"},
+                                   400)
+        audio = self.rfile.read(length)
+        mime = (self.headers.get("Content-Type") or "audio/wav").split(";")[0]
+        try:
+            return self._send_json(stt.transcribe(audio, mime))
+        except (ConfigError, ProviderError) as e:
+            return self._send_json({"error": str(e)}, 503)
+        except Exception as e:
+            traceback.print_exc()
+            return self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
 
     def _chat(self, body):
         message = (body.get("message") or "").strip()

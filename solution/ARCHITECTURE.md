@@ -296,6 +296,11 @@ the whole front end is one file (`web/index.html`). Four tabs:
 The same AI layer drives `cli.py ask` / `cli.py chat` for a terminal-only demo,
 and `cli.py demo | tools | call | repl` exercise the engine with no LLM at all.
 
+![Chat tab — streamed answer with a plain-language tool-call chip](../screenshots/chat.png)
+*The Chat tab: the tool call appears as a plain-language chip
+("→ Ranking legal, costed cover options for captain on P-2291") with the full
+engine result expandable beneath it; the mic button is the voice input.*
+
 ---
 
 ## 6. Correctness Harness (how we know it's right)
@@ -326,6 +331,12 @@ catalog in [EVALS.md](EVALS.md):
 Because held-out scenarios reuse the same event types, passing the visible
 keys via a **general engine** (not answer-key lookup) is our generalisation
 story.
+
+![Eval tab — full 44-item run graded live](../screenshots/eval.png)
+*The Eval tab grading a full 44-item run against the answer keys (run #9:
+33 PASS / 7 PARTIAL / 3 MANUAL / 1 ERROR), with per-item atom coverage,
+tool-call counts, timings, missing atoms and transcripts — all persisted to
+the SQLite run history.*
 
 ---
 

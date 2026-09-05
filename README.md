@@ -33,6 +33,66 @@ atom coverage, tool-call counts, timings, missing atoms and full transcripts.*
 | [`DCortex - Synthetic dataset…/`](.) | The provided dataset (10 JSON files + validator), used unmodified |
 | [`problem_explanation.pdf`](problem_explanation.pdf) | The problem statement |
 
+## Features
+
+The plan's core loop — *controller question → intent → operational data →
+deterministic rules → impact analysis → legal alternatives → ranked, explained
+recommendation → human decides* — is implemented end-to-end.
+
+**Core (the plan's P0 — must work):**
+
+- **Tier 1 — natural-language lookup.** "Who's on reserve at BLR tomorrow?",
+  "How many duty hours does C-1042 have left this week?", "Which certifications
+  expire soon?" — intent extraction by the LLM, answers computed by the query
+  engine.
+- **Deterministic rules engine.** The 7 legality rules (FDP, duty, flight-time,
+  rest, qualification, certification, base) as pure functions; every verdict
+  ships with its arithmetic trace. The LLM never calculates duty hours,
+  legality, or cost.
+- **Tier 2 — consequence & simulation.** "Captain C-1042 is sick tomorrow —
+  which flights are now uncrewed?", station closures, delay knock-ons — run on
+  copy-on-write world overlays, tracing downstream flights, pairings and crew.
+- **Explainable answers.** Every non-trivial answer exposes the evidence, the
+  rules checked, and the trade-offs — in the UI, each tool call's full engine
+  result is expandable under the prose.
+
+**Winning layer (the plan's P1):**
+
+- **Tier 3 — ranked recommendations.** "Who covers P-2291?" returns every
+  candidate enumerated, filtered through all 7 rules, costed, and ranked —
+  legality, qualification, reachability, coverage, cost and reasoning per
+  option.
+- **Operational impact ("blast radius").** A disruption answer includes the
+  affected flights, pairings, downstream legs, other crew, legal conflicts,
+  passengers and estimated cost — not just the immediate breakage.
+- **"Why not?"** Ask "why not C-2087?" and get the exact deterministic reason
+  (e.g. projected 61h20m vs the 60h/7d limit — excess 1h20m), plus the legal
+  alternatives.
+- **What-if comparison.** Alternatives are compared side by side on legality,
+  cost (₹), delay and coverage, with rejected options and their failing rules
+  listed.
+
+**Stretch (the plan's P2 — built anyway):**
+
+- **Voice input.** 🎤 in the chat tab → Sarvam Saarika STT → transcript in the
+  input box (verified live).
+- **Multi-turn conversation.** The chat keeps per-session context, so
+  follow-ups like "and what does that cost?" or "why not C-2087?" work.
+
+**Beyond the plan:**
+
+- **Provider-switchable AI layer.** Claude or Sarvam behind one neutral
+  interface, chosen by a `.env` switch — no provider hard-coded into business
+  logic; keys stay server-side.
+- **Built-in graded eval.** A 44-item atom-graded eval runnable from the
+  browser, with full run history persisted in SQLite.
+- **Groundedness + completeness gates.** Deterministic post-checks flag any id
+  the tools didn't return and re-add any tool fact the narration dropped.
+
+Plan features deliberately not built: the dashboard-style command center,
+a graph visualization of the blast radius (the impact data is there, rendered
+as tables/prose), and automated crew notifications.
+
 ## Setup
 
 Requirements: **Python 3.9+, no third-party packages** for the engine, web UI
